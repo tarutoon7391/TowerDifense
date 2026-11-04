@@ -121,6 +121,47 @@ button:hover { background: #474380; }
 button:disabled { opacity: 0.45; cursor: not-allowed; }
 button small { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
 
+/* 追加UI: 魔力・一時停止・魔法・星・ドラフト・リプレイ */
+.icon.mana { background: #8fb4ff; box-shadow: 0 0 4px #8fb4ff; }
+#manaStat.hidden { display: none; }
+#canvasWrap { position: relative; }
+.paused {
+  position: absolute; left: 50%; top: 12px; transform: translateX(-50%);
+  background: rgba(0,0,0,0.7); color: var(--gold); padding: 6px 14px; border-radius: 999px;
+  font-size: 13px; border: 1px solid var(--gold); z-index: 5; pointer-events: none;
+}
+#replayBadge { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 20; }
+.paused.hidden { display: none; }
+.row { display: flex; gap: 6px; align-items: stretch; }
+.row.center { justify-content: center; flex-wrap: wrap; margin-bottom: 10px; }
+.row > button { width: auto; flex: 1; }
+.row > button.small.ghost { flex: 0 0 auto; margin-top: 6px; }
+button.call { background: #6b4f1f; border-color: #c9a84a; margin-top: 6px; font-size: 14px; }
+button.call:hover { background: #7d5e26; }
+.spells h2 { margin-top: 12px; }
+.spells .row { flex-wrap: wrap; }
+.spells button { width: auto; flex: 1 1 45%; font-size: 12px; padding: 6px; text-align: center; }
+.spells button.active { border-color: #ff8a4a; background: #5a3a2a; }
+.spells button small { font-size: 10px; }
+.stars { font-size: 28px; color: var(--gold); letter-spacing: 4px; margin-bottom: 6px; min-height: 34px; }
+.stars .dim { color: #4b4670; }
+.opt { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.replay-row input {
+  flex: 1 1 320px; max-width: 480px; font-family: inherit; font-size: 12px; padding: 6px 8px;
+  background: #22203a; color: var(--text); border: 1px solid #4b4670; border-radius: 6px;
+}
+.replay-row button { width: auto; }
+.draft-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; text-align: left; }
+.draft-row .gname { width: 56px; font-size: 13px; color: var(--muted); }
+.draft-row button { width: auto; flex: 1; font-size: 12px; padding: 6px 8px; }
+.draft-row button.active { border-color: var(--gold); background: #4f4a2d; }
+.draft-row button small { font-size: 10px; }
+.stage-card .stars-sm { color: var(--gold); font-size: 13px; }
+.tool-desc .dps { color: var(--text); }
+.next-wave .mut { color: #ffb347; font-weight: bold; }
+button.tool.unaffordable { opacity: 0.6; }
+button.tool.unaffordable .cost { color: #ff8a8a; }
+
 /* ジャンルタブ */
 .tabs { display: flex; gap: 3px; margin-bottom: 6px; }
 .tabs button {

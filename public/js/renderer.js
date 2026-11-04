@@ -1,9 +1,10 @@
 // Canvas 2D 描画。外部画像は使わず、すべて図形で描く
 // 状態（state）は読むだけで、書き換えは一切しない
-import { TOWERS, ENEMIES, CELL_ROCK, CELL_WATER, CELL_EMPTY, getStage } from '/shared/config.js';
+import { TOWERS, ENEMIES, CELL_ROCK, CELL_WATER, CELL_EMPTY, CELL_HILL, getStage } from '/shared/config.js';
 import { PHASE } from '/shared/state.js';
 import { computePath } from '/shared/pathfinding.js';
 import { getTowerStats } from '/shared/towers.js';
+import { effectiveStats, portalsOf } from '/shared/buffs.js';
 
 // 1マスのピクセル数（ステージごとに main.js が設定する）
 export const layout = { cell: 40 };
@@ -54,6 +55,8 @@ export function render(ctx, state, ui) {
   drawGround(ctx, state.map);
   drawGrid(ctx, state.map);
   drawObstacles(ctx, state);
+  // 通れる建築（床・罠・警鐘・転送門・開いた跳ね橋）は地面の一部として先に描く
+  for (const t of state.towers) if (isFlat(t)) drawTower(ctx, t.x, t.y, t.type, 1, t.level, t);
   if (state.phase === PHASE.PREPARE) {
     // 現在の最短経路。設置プレビュー中は「置いた後の経路」を上書き表示する
     if (ui.hoverFlow) {
@@ -65,14 +68,78 @@ export function render(ctx, state, ui) {
     drawFlyingRoute(ctx, state);
   }
   drawStartGoal(ctx, state.map);
-  for (const t of state.towers) drawTower(ctx, t.x, t.y, t.type, 1, t.level);
+  for (const t of state.towers) if (!isFlat(t)) drawTower(ctx, t.x, t.y, t.type, 1, t.level, t);
+  for (const u of state.units || []) drawUnit(ctx, u);
   for (const fx of state.effects) drawEffect(ctx, fx);
   // 地上の敵 → 弾 → 飛行の敵 の順で重ねる
-  for (const e of state.enemies) if (!e.flying) drawEnemy(ctx, e, state.waveTick);
+  const airborne = (e) => e.flying && !(e.groundedUntil > state.waveTick);
+  for (const e of state.enemies) if (!airborne(e)) drawEnemy(ctx, e, state.waveTick);
   for (const p of state.projectiles) drawProjectile(ctx, p);
-  for (const e of state.enemies) if (e.flying) drawEnemy(ctx, e, state.waveTick);
+  for (const e of state.enemies) if (airborne(e)) drawEnemy(ctx, e, state.waveTick);
   drawSelection(ctx, state, ui);
   drawHover(ctx, state, ui);
+  if (ui.spellTarget) drawSpellTarget(ctx, ui);
+}
+
+// 地面扱いで描く建築か（通れる建築、開いた跳ね橋）
+function isFlat(t) {
+  return !!TOWERS[t.type].passable || (TOWERS[t.type].toggleable && t.open);
+}
+
+// 兵士ユニット（兵舎: 小さな兵、騎士団: 大きな盾）
+function drawUnit(ctx, u) {
+  const C = layout.cell;
+  const px = u.x * C + C / 2;
+  const py = u.y * C + C / 2;
+  ctx.save();
+  if (u.hp <= 0) {
+    ctx.globalAlpha = 0.35;
+  }
+  const knight = u.type === 'knights';
+  const r = (knight ? 11 : 7) * (C / 40);
+  ctx.fillStyle = knight ? '#8ea3c4' : '#c9a86b';
+  ctx.strokeStyle = '#2a2a3a';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(px, py, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  // 盾
+  ctx.fillStyle = knight ? '#3b4f7a' : '#7a4f2b';
+  ctx.beginPath();
+  ctx.moveTo(px + r * 0.2, py - r * 0.9);
+  ctx.lineTo(px + r * 1.1, py - r * 0.6);
+  ctx.lineTo(px + r * 1.1, py + r * 0.4);
+  ctx.lineTo(px + r * 0.6, py + r * 1.0);
+  ctx.lineTo(px + r * 0.2, py + r * 0.4);
+  ctx.closePath();
+  ctx.fill();
+  if (u.hp > 0 && u.hp < u.maxHp) {
+    const bw = 20 * (C / 40);
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(px - bw / 2, py - r - 8, bw, 3);
+    ctx.fillStyle = '#9fd0ff';
+    ctx.fillRect(px - bw / 2, py - r - 8, bw * (u.hp / u.maxHp), 3);
+  }
+  ctx.restore();
+}
+
+// メテオの着弾指定カーソル
+function drawSpellTarget(ctx, ui) {
+  if (!ui.hover) return;
+  const C = layout.cell;
+  const cx = ui.hover.x * C + C / 2;
+  const cy = ui.hover.y * C + C / 2;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255, 120, 60, 0.9)';
+  ctx.fillStyle = 'rgba(255, 120, 60, 0.18)';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 4]);
+  ctx.beginPath();
+  ctx.arc(cx, cy, ui.spellTarget.radius * C, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
 }
 
 // 草原の地面
@@ -134,8 +201,27 @@ function drawObstacles(ctx, state) {
       const v = state.grid[y * cols + x];
       if (v === CELL_ROCK) drawRock(ctx, x, y);
       else if (v === CELL_WATER) drawWater(ctx, x, y, state.grid, cols, rows);
+      else if (v === CELL_HILL) drawHill(ctx, x, y);
     }
   }
+  // 高台の上に建てた建物の足元にも高台を描く
+  for (const t of state.towers) if (t.onHill) drawHill(ctx, t.x, t.y);
+}
+
+// 高台: 明るい土色の台地
+function drawHill(ctx, x, y) {
+  const C = layout.cell;
+  const px = x * C;
+  const py = y * C;
+  ctx.fillStyle = '#9a8a5a';
+  ctx.fillRect(px, py, C, C);
+  ctx.fillStyle = '#b8a46a';
+  ctx.fillRect(px + 3, py + 3, C - 6, C - 6);
+  ctx.strokeStyle = '#6e6238';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(px + 3.5, py + 3.5, C - 7, C - 7);
+  ctx.fillStyle = 'rgba(255,255,255,0.25)';
+  ctx.fillRect(px + 3, py + 3, C - 6, 3);
 }
 
 function drawRock(ctx, x, y) {
@@ -193,7 +279,7 @@ function drawWater(ctx, x, y, grid, cols, rows) {
 // 準備フェーズ中: 距離マップ flow に沿った最短経路を表示
 function drawPath(ctx, state, flow, color) {
   const C = layout.cell;
-  const path = computePath(flow, state.map);
+  const path = computePath(flow, state.map, portalsOf(state));
   if (path.length < 2) return;
   ctx.save();
   ctx.strokeStyle = color;
@@ -280,17 +366,54 @@ function drawStartGoal(ctx, map) {
 }
 
 // タワー。alpha はプレビュー用の透明度、level でレベル表示
-export function drawTower(ctx, x, y, type, alpha, level = 1) {
+export function drawTower(ctx, x, y, type, alpha, level = 1, tower = null) {
   const C = layout.cell;
   const c = TOWER_COLORS[type];
   const px = x * C;
   const py = y * C;
   const cx = px + C / 2;
   const cy = py + C / 2;
+  const def = TOWERS[type];
   ctx.save();
   ctx.globalAlpha = alpha;
 
-  if (type === 'wall') {
+  // 通れる建築（床・罠・警鐘・転送門）と開いた跳ね橋は平らなタイルとして描く
+  if (def.passable || (def.toggleable && tower && tower.open)) {
+    drawFlatTile(ctx, type, px, py, cx, cy, tower);
+    ctx.restore();
+    return;
+  }
+
+  if (type === 'wall' || type === 'ironwall' || type === 'drawbridge') {
+    // 石積みの壁（鉄壁は暗い金属色、跳ね橋は木色）
+    const wc = type === 'ironwall' ? { main: '#6f7682', sub: '#2f343c' }
+      : type === 'drawbridge' ? { main: '#8a6a3a', sub: '#4a3618' } : c;
+    ctx.fillStyle = wc.main;
+    ctx.fillRect(px + 2, py + 2, C - 4, C - 4);
+    ctx.strokeStyle = wc.sub;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(px + 2, py + 2, C - 4, C - 4);
+    ctx.beginPath();
+    ctx.moveTo(px + 2, cy); ctx.lineTo(px + C - 2, cy);
+    ctx.moveTo(cx, py + 2); ctx.lineTo(cx, cy);
+    ctx.moveTo(px + C * 0.25, cy); ctx.lineTo(px + C * 0.25, py + C - 2);
+    ctx.moveTo(px + C * 0.75, cy); ctx.lineTo(px + C * 0.75, py + C - 2);
+    ctx.stroke();
+    if (type === 'ironwall') {
+      ctx.fillStyle = '#c9ced6';
+      for (const [ox, oy] of [[6, 6], [C - 8, 6], [6, C - 8], [C - 8, C - 8]]) ctx.fillRect(px + ox, py + oy, 3, 3);
+    }
+    if (type === 'drawbridge') {
+      ctx.strokeStyle = '#2a2a3a';
+      ctx.beginPath();
+      ctx.moveTo(px + 4, py + 4); ctx.lineTo(px + C - 4, py + C - 4);
+      ctx.stroke();
+    }
+    ctx.restore();
+    return;
+  }
+
+  if (false) {
     // 石積みの壁
     ctx.fillStyle = c.main;
     ctx.fillRect(px + 2, py + 2, C - 4, C - 4);
@@ -620,20 +743,78 @@ function drawGenericTower(ctx, type, px, py, cx, cy, c) {
   ctx.fillText(def.short, cx, cy + C * 0.12);
 }
 
+// 通れる建築の平らなタイル（床・罠・警鐘・転送門・開いた跳ね橋）
+function drawFlatTile(ctx, type, px, py, cx, cy, tower) {
+  const C = layout.cell;
+  const def = TOWERS[type];
+  const colors = {
+    mudfloor: '#6b5a3a', icefloor: '#bfe8ff', holyfloor: '#f3e6b5', oilfloor: '#2d2a28',
+    pitfall: '#3a2f22', landmine: '#5a5a4a', alarm: '#c9a84a', portal: '#5a2d8a', drawbridge: '#8a6a3a',
+  };
+  ctx.fillStyle = colors[type] || '#777';
+  ctx.globalAlpha *= 0.9;
+  ctx.fillRect(px + 2, py + 2, C - 4, C - 4);
+  ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(px + 2.5, py + 2.5, C - 5, C - 5);
+  // 種類ごとの印
+  ctx.lineWidth = 2;
+  if (type === 'icefloor') {
+    ctx.strokeStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.moveTo(px + 8, py + C - 8); ctx.lineTo(px + C - 8, py + 8);
+    ctx.moveTo(px + 8, py + 12); ctx.lineTo(px + 14, py + 8);
+    ctx.stroke();
+  } else if (type === 'mudfloor') {
+    ctx.fillStyle = '#4a3b22';
+    ctx.beginPath(); ctx.ellipse(cx, cy, C * 0.3, C * 0.18, 0, 0, Math.PI * 2); ctx.fill();
+  } else if (type === 'oilfloor') {
+    ctx.fillStyle = '#5a4a6a';
+    ctx.beginPath(); ctx.ellipse(cx - 3, cy, C * 0.26, C * 0.14, 0.4, 0, Math.PI * 2); ctx.fill();
+  } else if (type === 'holyfloor') {
+    ctx.strokeStyle = '#d9b34a';
+    ctx.beginPath(); ctx.arc(cx, cy, C * 0.26, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx, cy - C * 0.3); ctx.lineTo(cx, cy + C * 0.3); ctx.moveTo(cx - C * 0.2, cy - C * 0.1); ctx.lineTo(cx + C * 0.2, cy - C * 0.1); ctx.stroke();
+  } else if (type === 'pitfall') {
+    ctx.fillStyle = tower && !tower.armed ? '#6a5a44' : '#120d08';
+    ctx.beginPath(); ctx.ellipse(cx, cy, C * 0.3, C * 0.22, 0, 0, Math.PI * 2); ctx.fill();
+  } else if (type === 'landmine') {
+    ctx.fillStyle = tower && !tower.armed ? '#3a3a2a' : '#c23';
+    ctx.beginPath(); ctx.arc(cx, cy, C * 0.14, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#333';
+    ctx.beginPath(); ctx.arc(cx, cy, C * 0.26, 0, Math.PI * 2); ctx.stroke();
+  } else if (type === 'alarm') {
+    ctx.fillStyle = '#6a4a1a';
+    ctx.beginPath(); ctx.moveTo(cx, cy - C * 0.28); ctx.lineTo(cx + C * 0.2, cy + C * 0.18); ctx.lineTo(cx - C * 0.2, cy + C * 0.18); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#ffe48a';
+    ctx.beginPath(); ctx.arc(cx, cy + C * 0.22, 3, 0, Math.PI * 2); ctx.fill();
+  } else if (type === 'portal') {
+    ctx.strokeStyle = '#d98cff';
+    ctx.beginPath(); ctx.arc(cx, cy, C * 0.3, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(cx, cy, C * 0.17, 0, Math.PI * 2); ctx.stroke();
+  } else if (type === 'drawbridge') {
+    ctx.strokeStyle = '#4a3618';
+    for (let i = 1; i < 4; i++) { ctx.beginPath(); ctx.moveTo(px + 4, py + i * C / 4); ctx.lineTo(px + C - 4, py + i * C / 4); ctx.stroke(); }
+  }
+  void def;
+}
+
 // 敵。種類ごとに形と大きさを変え、頭上にHPバー
 function drawEnemy(ctx, e, state_waveTick) {
   const C = layout.cell;
-  const s = C / 40; // 40px 基準の倍率
-  const c = ENEMY_COLORS[e.type];
+  const s = (C / 40) * (e.giant ? 1.6 : 1); // 40px 基準の倍率（巨大化は1.6倍）
+  const c = ENEMY_COLORS[e.type] || { body: '#888', edge: '#333' };
   const px = e.x * C;
   let py = e.y * C;
+  const grounded = e.flying && e.groundedUntil > state_waveTick;
   // 状態異常は「現在の waveTick が期限より前」のときだけ表示する
   const slowed = state_waveTick < e.slowUntil;
   const poisoned = state_waveTick < e.poisonUntil;
   const cursed = state_waveTick < e.curseUntil;
   ctx.save();
 
-  if (e.flying) {
+  if (e.flying && !grounded) {
     // 影を落として浮かせる
     ctx.fillStyle = 'rgba(0,0,0,0.25)';
     ctx.beginPath();
@@ -744,9 +925,55 @@ function drawEnemy(ctx, e, state_waveTick) {
       ctx.fillRect(px - 8 * s, py - 4 * s, 5 * s, 3 * s);
       ctx.fillRect(px + 3 * s, py - 4 * s, 5 * s, 3 * s);
       break;
+    case 'ogre_ram':
+      // 破城槌を担いだ大柄なオーガ
+      ctx.fillStyle = '#7a6a4a';
+      circle(ctx, px, py, 14 * s);
+      ctx.fillStyle = '#4a3a2a';
+      ctx.fillRect(px - 18 * s, py - 3 * s, 36 * s, 6 * s);
+      ctx.fillStyle = '#9a9a9a';
+      ctx.fillRect(px + 14 * s, py - 6 * s, 8 * s, 12 * s);
+      break;
+    case 'thief':
+      // 黒ずくめ＋金袋
+      ctx.fillStyle = '#2a2a33';
+      circle(ctx, px, py, 8 * s);
+      ctx.fillStyle = '#f2c14e';
+      ctx.beginPath(); ctx.arc(px + 9 * s, py + 4 * s, 5 * s, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#ff5a5a';
+      ctx.fillRect(px - 4 * s, py - 2 * s, 2, 2);
+      ctx.fillRect(px + 2 * s, py - 2 * s, 2, 2);
+      break;
+    case 'necromancer':
+      // 紫のローブと杖
+      ctx.fillStyle = '#4a2a6a';
+      ctx.beginPath();
+      ctx.moveTo(px, py - 14 * s);
+      ctx.lineTo(px + 10 * s, py + 12 * s);
+      ctx.lineTo(px - 10 * s, py + 12 * s);
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#d98cff';
+      ctx.beginPath(); ctx.arc(px, py - 4 * s, 4 * s, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#c9b27a';
+      ctx.beginPath(); ctx.moveTo(px + 12 * s, py + 12 * s); ctx.lineTo(px + 12 * s, py - 14 * s); ctx.stroke();
+      break;
     default:
       circle(ctx, px, py, 9 * s);
   }
+
+  // 巨大化・着地中・油まみれの印
+  if (e.giant) {
+    ctx.strokeStyle = '#ffd34d';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(px, py, 24 * s, 0, Math.PI * 2); ctx.stroke();
+  }
+  if (grounded) {
+    ctx.strokeStyle = 'rgba(120, 90, 255, 0.9)';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(px - 10 * s, py + 12 * s); ctx.lineTo(px + 10 * s, py + 12 * s); ctx.stroke();
+  }
+  if (e.oilUntil > state_waveTick) ring(ctx, px, py, 13 * s, 'rgba(60, 40, 80, 0.9)');
 
   // スロウ中は青い輪、毒中は緑の輪、呪い中は紫の輪
   if (slowed) ring(ctx, px, py, 16 * s, 'rgba(120, 220, 255, 0.9)');
@@ -849,6 +1076,22 @@ function drawEffect(ctx, fx) {
       }
     });
     ctx.stroke();
+  } else if (fx.kind === 'trap') {
+    const t = 1 - fx.ttl / 12;
+    ctx.strokeStyle = `rgba(255, 220, 120, ${1 - t})`;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(fx.x * C, fx.y * C, fx.r * C * (0.5 + 0.5 * t), 0, Math.PI * 2);
+    ctx.stroke();
+  } else if (fx.kind === 'summon' || fx.kind === 'teleport') {
+    const t = 1 - fx.ttl / 10;
+    ctx.strokeStyle = fx.kind === 'summon' ? `rgba(217, 140, 255, ${1 - t})` : `rgba(255, 255, 255, ${1 - t})`;
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 3; i++) {
+      ctx.beginPath();
+      ctx.arc(fx.x * C, fx.y * C, fx.r * C * (0.3 + 0.7 * t) * (1 - i * 0.25), 0, Math.PI * 2);
+      ctx.stroke();
+    }
   } else if (fx.kind === 'beam') {
     const t = 1 - fx.ttl / 7;
     ctx.strokeStyle = `rgba(159, 180, 255, ${1 - t})`;
@@ -885,26 +1128,72 @@ function drawEffect(ctx, fx) {
   ctx.restore();
 }
 
-// 選択中の建物: 射程円と枠
+// 建物の「効果範囲」を描く: 攻撃射程（白）、支援/賞金/兵士/警鐘の範囲（金）。範囲内の塔は枠で強調
+function drawRanges(ctx, state, x, y, stats, color) {
+  const C = layout.cell;
+  const cx = x * C + C / 2;
+  const cy = y * C + C / 2;
+  ctx.save();
+  if (stats.range && stats.attack !== 'none') {
+    ctx.fillStyle = color.fill;
+    ctx.strokeStyle = color.stroke;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(cx, cy, stats.range * C, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+  const aux = stats.buff?.range ?? stats.bounty?.range ?? stats.units?.range ?? stats.alarm?.range ?? 0;
+  if (aux > 0 && aux < 100) {
+    ctx.fillStyle = 'rgba(242, 193, 78, 0.10)';
+    ctx.strokeStyle = 'rgba(242, 193, 78, 0.85)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.arc(cx, cy, aux * C, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // 範囲内の塔を強調（支援の対象が分かる）
+    if (stats.buff || stats.alarm) {
+      for (const o of state.towers) {
+        if (o.x === x && o.y === y) continue;
+        if (TOWERS[o.type].attack === 'none') continue;
+        if (stats.buff?.only && stats.buff.only !== TOWERS[o.type].damageType) continue;
+        if (Math.hypot(o.x - x, o.y - y) > aux) continue;
+        ctx.strokeStyle = 'rgba(242, 193, 78, 0.9)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(o.x * C + 3, o.y * C + 3, C - 6, C - 6);
+      }
+    }
+  }
+  ctx.restore();
+}
+
+// 選択中の建物: 実効射程（支援込み）と枠
 function drawSelection(ctx, state, ui) {
   if (!ui.selected) return;
   const C = layout.cell;
   const t = state.towers.find((tw) => tw.x === ui.selected.x && tw.y === ui.selected.y);
   if (!t) return;
-  const stats = getTowerStats(t.type, t.level);
+  const stats = effectiveStats(state, t);
+  drawRanges(ctx, state, t.x, t.y, stats, { fill: 'rgba(255, 255, 255, 0.08)', stroke: 'rgba(255, 255, 255, 0.6)' });
   ctx.save();
-  if (stats.range) {
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.arc(t.x * C + C / 2, t.y * C + C / 2, stats.range * C, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-  }
   ctx.strokeStyle = '#f2c14e';
   ctx.lineWidth = 3;
   ctx.strokeRect(t.x * C + 1.5, t.y * C + 1.5, C - 3, C - 3);
+  // 支援を受けている塔なら、支援元を線で示す
+  for (const s of state.towers) {
+    const b = getTowerStats(s.type, s.level, s.branch).buff;
+    if (!b || s === t || b.range > 100) continue;
+    if (Math.hypot(s.x - t.x, s.y - t.y) > b.range) continue;
+    ctx.strokeStyle = 'rgba(242, 193, 78, 0.6)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(s.x * C + C / 2, s.y * C + C / 2);
+    ctx.lineTo(t.x * C + C / 2, t.y * C + C / 2);
+    ctx.stroke();
+  }
   ctx.restore();
 }
 
@@ -939,16 +1228,12 @@ function drawHover(ctx, state, ui) {
   } else if (ui.tool && TOWERS[ui.tool]) {
     const ok = ui.hoverOk;
     const stats = getTowerStats(ui.tool, 1);
-    if (stats.range) {
-      ctx.fillStyle = ok ? 'rgba(255, 255, 200, 0.12)' : 'rgba(255, 80, 80, 0.12)';
-      ctx.strokeStyle = ok ? 'rgba(255, 255, 200, 0.7)' : 'rgba(255, 80, 80, 0.8)';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.arc(cx, cy, stats.range * C, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-    }
+    // 攻撃射程と、支援/賞金/兵士/警鐘の効果範囲（範囲内の塔は強調）
+    drawRanges(ctx, state, x, y, stats, ok
+      ? { fill: 'rgba(255, 255, 200, 0.12)', stroke: 'rgba(255, 255, 200, 0.7)' }
+      : { fill: 'rgba(255, 80, 80, 0.12)', stroke: 'rgba(255, 80, 80, 0.8)' });
     drawTower(ctx, x, y, ui.tool, 0.6);
+    void cx; void cy;
     if (!ok) {
       ctx.fillStyle = 'rgba(255, 60, 60, 0.45)';
       ctx.fillRect(px, py, C, C);

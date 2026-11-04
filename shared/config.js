@@ -11,6 +11,51 @@ export const ECONOMY = {
   waveClearBonusBase: 30,           // ウェーブクリアボーナス = base + perWave * ウェーブ番号
   waveClearBonusPerWave: 10,
   rewardHpScale: 0.5,               // 撃破報酬 = reward × (1 + rewardHpScale × (hpMul − 1))
+  earlyCallGold: 3,                 // 早回しコール: 残っている敵1体につきもらえるボーナス
+  manaCap: 12,                      // 魔力の上限
+  knockbackImmunitySec: 1.5,        // 押し戻された敵は一定時間ふたたび押し戻されない（無限足止め防止）
+  unitRespawnSec: 30,               // 倒された兵士が再出撃するまでの秒数
+  unitEngageRadius: 0.6,            // 兵士が敵を足止めできる距離
+  enemyAttackPerSec: 12,            // 兵士に足止めされた敵が兵士に与える毎秒ダメージ
+};
+
+// ---- ウェーブ変異（シードとウェーブ番号から決まる。偵察気球で事前に分かる） ----
+export const MUTATIONS = [
+  { id: 'none',    name: '',           weight: 5 },
+  { id: 'armored', name: '重装',       weight: 2, armorAdd: 4,  desc: '全員の鎧+4' },
+  { id: 'giant',   name: '巨大化',     weight: 2, giantHpMul: 5, giantRewardMul: 5, desc: '先頭の1体がHP5倍・報酬5倍' },
+  { id: 'swift',   name: '疾走',       weight: 2, speedMul: 1.2, desc: '全員の速度+20%' },
+  { id: 'horde',   name: '大群',       weight: 1, countMul: 1.3, hpMulMul: 0.85, desc: '数1.3倍（HPは少し低い）' },
+  { id: 'cursed',  name: '呪われた',   weight: 1, regenAdd: 3, desc: '全員が毎秒3回復' },
+];
+
+// ---- 状態反応（敵に乗っている状態と攻撃の組み合わせで追加効果） ----
+export const REACTIONS = {
+  oilFire:   { name: '引火爆発', damage: 60, radius: 1.0 },      // 油まみれ + 炎属性の攻撃 → 範囲爆発（油は消える）
+  shatter:   { name: '砕け',   hpBelow: 0.3 },                   // 気絶中 + 砕き属性（衝撃槌など）→ HP30%以下なら即死
+  purify:    { name: '浄化',   poisonBurst: 1.0 },               // 毒状態 + 聖属性 → 残り毒ダメージを一括で与える
+};
+
+// ---- 地形相性 ----
+export const TERRAIN = {
+  hillRangeAdd: 1.0,                // 高台に建てた塔の射程ボーナス
+  shoreSlowAdd: -0.1,               // 水辺（隣が水）の塔の減速強化（factor に加算）
+};
+
+// ---- 隣接シナジー（8方向に隣り合うと両方に効果） ----
+export const SYNERGIES = [
+  { a: 'catapult', b: 'ice', name: '蒸気爆発', splashMul: 1.5 },
+  { a: 'lightning', b: 'holy', name: '浄化', undeadExecuteChance: 0.1 },
+  { a: 'flamer', b: 'wind', name: '火炎旋風', rangeAdd: 0.5 },
+  { a: 'poison', b: 'plague', name: '猛毒', poisonMul: 1.5 },
+  { a: 'archer', b: 'smithy', name: '名工の矢', critAdd: 0.15 },
+];
+
+// ---- アクティブ魔法（魔力炉で貯めた魔力を消費。ウェーブ中に使う） ----
+export const SPELLS = {
+  meteor: { name: 'メテオ', desc: '指定地点に大ダメージ', cost: 3, damage: 220, radius: 1.8, damageType: 'magic' },
+  freeze: { name: '全体凍結', desc: '全ての敵を3秒間大きく減速', cost: 2, slow: { factor: 0.2, duration: 3.0 } },
+  repair: { name: '修復', desc: 'このウェーブで壊された壁を無料で建て直す', cost: 2 },
 };
 
 // ---- アップグレード ----
@@ -36,7 +81,9 @@ export const COMBAT = {
 export const CELL_EMPTY = 0;
 export const CELL_TOWER = 1;
 export const CELL_ROCK = 2;         // 岩: 通れない・建てられない
-export const CELL_WATER = 3;        // 水: 通れない・建てられない
+export const CELL_WATER = 3;        // 水: 通れない・建てられない（桟橋で陸地にできる）
+export const CELL_HILL = 4;         // 高台: 通れないが建てられる（射程ボーナス）
+export const CELL_FLOOR = 5;        // 通れる建築（床・罠）が置かれているマス
 
 // ---- 建築ジャンル（UIのタブ順） ----
 export const GENRES = [
@@ -64,7 +111,7 @@ export const TOWERS = {
     genre: 'melee', name: '茨の壁', short: '茨',
     desc: '安い壁。隣を通る地上の敵をチクチク刺す。物理',
     cost: 14, range: 1.2, damage: 3, cooldown: 0.5,
-    attack: 'aura', damageType: 'physical', groundOnly: true,
+    attack: 'aura', damageType: 'physical', groundOnly: true, breakable: true,
   },
   spear: {
     genre: 'melee', name: '槍兵の櫓', short: '槍',
@@ -76,7 +123,7 @@ export const TOWERS = {
     genre: 'melee', name: '火炎放射器', short: '炎',
     desc: '前方の地上敵をまとめて焼き、炎上させる。魔法',
     cost: 95, range: 1.6, damage: 5, cooldown: 0.3,
-    attack: 'aura', damageType: 'magic', groundOnly: true,
+    attack: 'aura', damageType: 'magic', groundOnly: true, fire: true,
     poison: { dps: 6, duration: 2.0 },
   },
   blade: {
@@ -89,7 +136,7 @@ export const TOWERS = {
     genre: 'melee', name: '聖光の祭壇', short: '聖',
     desc: '射程内の全敵に光のダメージ。アンデッドに2倍。魔法',
     cost: 180, range: 2.2, damage: 10, cooldown: 0.7,
-    attack: 'aura', damageType: 'magic', undeadMul: 2,
+    attack: 'aura', damageType: 'magic', undeadMul: 2, holy: true,
   },
   frostfield: {
     genre: 'melee', name: '氷柱の結界', short: '柱',
@@ -101,13 +148,13 @@ export const TOWERS = {
     genre: 'melee', name: '衝撃槌', short: '槌',
     desc: '重い一撃で周囲を打ち、ときどき気絶させる。物理',
     cost: 160, range: 1.5, damage: 40, cooldown: 1.6,
-    attack: 'aura', damageType: 'physical', stun: { chance: 0.3, duration: 0.8 },
+    attack: 'aura', damageType: 'physical', stun: { chance: 0.3, duration: 0.8 }, shatter: true,
   },
   dragonmaw: {
     genre: 'melee', name: '竜の火口', short: '竜',
     desc: '超短射程の最高火力。地上の敵を焼き尽くす。魔法',
     cost: 240, range: 1.5, damage: 18, cooldown: 0.35,
-    attack: 'aura', damageType: 'magic', groundOnly: true,
+    attack: 'aura', damageType: 'magic', groundOnly: true, fire: true,
     poison: { dps: 10, duration: 3.0 },
   },
   guillotine: {
@@ -134,13 +181,28 @@ export const TOWERS = {
     cost: 140, range: 2.0, damage: 8, cooldown: 2.5, projectileSpeed: 20,
     attack: 'homing', damageType: 'magic', knockback: { chance: 1, cells: 2 },
   },
+  garrison: {
+    genre: 'melee', name: '兵舎', short: '兵',
+    desc: '周囲2マスの通路に兵士3体を配置。兵士は触れた地上の敵を足止めする（倒されても30秒で再出撃）',
+    cost: 130, attack: 'none', units: { count: 3, hp: 150, range: 2.0 },
+  },
+  knights: {
+    genre: 'melee', name: '騎士団', short: '騎',
+    desc: '周囲2マスの通路に重装騎士1体を配置。高HPで長く足止めする',
+    cost: 220, attack: 'none', units: { count: 1, hp: 600, range: 2.0 },
+  },
 
   // ======== 遠距離 ========
   archer: {
     genre: 'ranged', name: 'アーチャー塔', short: '弓',
     desc: '安くて手堅い単体攻撃。物理',
-    cost: 50, range: 2.6, damage: 12, cooldown: 0.6, projectileSpeed: 10,
+    cost: 50, range: 3.0, damage: 12, cooldown: 0.6, projectileSpeed: 10,
     attack: 'homing', damageType: 'physical',
+    // Lv3 で分岐（mods はレベル3の値に上書き・加算される）
+    branches: {
+      a: { name: '連射弓', desc: '攻撃間隔を半分に（威力は少し下がる）', mods: { cooldownMul: 0.5, damageMul: 0.8 } },
+      b: { name: '狙撃弓', desc: '射程+1.5・威力1.6倍・鎧貫通（間隔は長く）', mods: { rangeAdd: 1.5, damageMul: 1.6, cooldownMul: 1.6, pierceArmor: true } },
+    },
   },
   crossbow: {
     genre: 'ranged', name: '弩兵の塔', short: '弩',
@@ -171,6 +233,10 @@ export const TOWERS = {
     desc: '着弾地点に範囲ダメージ。飛行には当たらない。物理',
     cost: 140, range: 3.6, damage: 45, cooldown: 2.4, projectileSpeed: 9,
     attack: 'splash', damageType: 'physical', splashRadius: 1.1, groundOnly: true, leadTarget: true,
+    branches: {
+      a: { name: '榴弾', desc: '爆発範囲1.5倍', mods: { splashMul: 1.5 } },
+      b: { name: '焼夷弾', desc: '着弾した敵を炎上させる', mods: { poison: { dps: 10, duration: 3.0 } } },
+    },
   },
   cannon: {
     genre: 'ranged', name: '魔導砲', short: '砲',
@@ -183,6 +249,10 @@ export const TOWERS = {
     desc: '雷が敵から敵へ連鎖する。魔法',
     cost: 160, range: 2.8, damage: 22, cooldown: 1.2,
     attack: 'chain', damageType: 'magic', chain: { jumps: 4, range: 1.8, decay: 0.75 },
+    branches: {
+      a: { name: '稲妻の嵐', desc: '連鎖回数+3', mods: { chainJumpsAdd: 3 } },
+      b: { name: '雷帝の一撃', desc: '威力1.6倍（連鎖の減衰は強く）', mods: { damageMul: 1.6, chainDecay: 0.6 } },
+    },
   },
   moonbow: {
     genre: 'ranged', name: '月光の弓', short: '月',
@@ -208,6 +278,13 @@ export const TOWERS = {
     cost: 320, range: 4.5, damage: 120, cooldown: 4.0, projectileSpeed: 7,
     attack: 'splash', damageType: 'magic', splashRadius: 1.6, leadTarget: true,
     poison: { dps: 8, duration: 3.0 },
+  },
+  dragonnest: {
+    genre: 'ranged', name: '竜の巣', short: '巣',
+    desc: '1ステージに1基だけ。範囲＋炎上、飛行にも当たる最終兵器。魔法',
+    cost: 400, range: 4.0, damage: 160, cooldown: 2.0, projectileSpeed: 10,
+    attack: 'splash', damageType: 'magic', splashRadius: 1.5, leadTarget: true, limit: 1,
+    poison: { dps: 15, duration: 3.0 },
   },
 
   // ======== 支援 ========
@@ -271,6 +348,16 @@ export const TOWERS = {
     desc: 'すぐ隣の塔の攻撃+35%。置き場所が勝負',
     cost: 300, attack: 'none', buff: { range: 1.0, damageMul: 1.35 },
   },
+  alarm: {
+    genre: 'support', name: '警鐘', short: '鐘',
+    desc: '敵が通れる床。踏まれると周囲2.5マスの塔が5秒間攻撃+50%（ウェーブごとに何度でも、3秒おき）',
+    cost: 80, attack: 'none', passable: true, alarm: { range: 2.5, damageMul: 1.5, duration: 5.0, cooldown: 3.0 },
+  },
+  darkaltar: {
+    genre: 'support', name: '禁断の祭壇', short: '禁',
+    desc: '周囲1.5マスの塔の攻撃2倍。代わりにウェーブ終了ごとにライフ−1',
+    cost: 200, attack: 'none', buff: { range: 1.5, damageMul: 2.0 }, livesPerWave: -1,
+  },
 
   // ======== 妨害 ========
   mire: {
@@ -284,6 +371,10 @@ export const TOWERS = {
     desc: '命中した敵を減速させる。魔法',
     cost: 70, range: 2.3, damage: 5, cooldown: 0.9, projectileSpeed: 8,
     attack: 'homing', damageType: 'magic', slow: { factor: 0.5, duration: 2.0 },
+    branches: {
+      a: { name: '凍結', desc: '20%で0.8秒凍らせる', mods: { stun: { chance: 0.2, duration: 0.8 } } },
+      b: { name: '吹雪', desc: '着弾地点の周囲1マスにも減速', mods: { splashRadius: 1.0 } },
+    },
   },
   poison: {
     genre: 'debuff', name: '毒の祭壇', short: '毒',
@@ -311,9 +402,9 @@ export const TOWERS = {
   },
   mirror: {
     genre: 'debuff', name: '幻惑の鏡', short: '鏡',
-    desc: '敵を幻で惑わせ、3マス押し戻す。魔法',
+    desc: '60%で敵を3マス押し戻す。押し戻された敵はしばらく効かない。魔法',
     cost: 140, range: 2.5, damage: 5, cooldown: 2.0, projectileSpeed: 20,
-    attack: 'homing', damageType: 'magic', knockback: { chance: 1, cells: 3 },
+    attack: 'homing', damageType: 'magic', knockback: { chance: 0.6, cells: 3 },
   },
   blizzard: {
     genre: 'debuff', name: '吹雪の塔', short: '吹',
@@ -341,21 +432,97 @@ export const TOWERS = {
   },
   gravity: {
     genre: 'debuff', name: '重力の塔', short: '重',
-    desc: '周囲の敵を強く減速。飛行も地面に引きずり下ろす。魔法',
+    desc: '周囲の敵を強く減速。飛行する敵を3秒間地面に引きずり下ろし、迷路を歩かせる。魔法',
     cost: 220, range: 2.2, damage: 4, cooldown: 0.5,
     attack: 'aura', damageType: 'magic', slow: { factor: 0.4, duration: 1.0 }, flyingMul: 2,
+    ground: { duration: 3.0 },
   },
 
   // ======== 特殊 ========
   wall: {
     genre: 'special', name: '石壁', short: '壁',
-    desc: '攻撃しない安価な壁。迷路づくりの主役',
-    cost: 6, attack: 'none',
+    desc: '攻撃しない安価な壁。迷路づくりの主役（破城槌に壊される）',
+    cost: 6, attack: 'none', breakable: true,
+  },
+  ironwall: {
+    genre: 'special', name: '鉄壁', short: '鉄',
+    desc: '破城槌オーガに壊されない頑丈な壁',
+    cost: 18, attack: 'none',
+  },
+  pier: {
+    genre: 'special', name: '桟橋', short: '橋',
+    desc: '水の上にだけ置ける。そのマスを陸地にして建築可能にする（敵も通れるようになる）',
+    cost: 30, attack: 'none', placeOn: 'water', convertsToLand: true,
+  },
+  mudfloor: {
+    genre: 'special', name: '泥濘の床', short: '泥',
+    desc: '敵が通れる床。踏んだ地上の敵は速度×0.6（2秒）',
+    cost: 12, attack: 'none', passable: true, floor: { slow: { factor: 0.6, duration: 2.0 } },
+  },
+  icefloor: {
+    genre: 'special', name: '氷床', short: '滑',
+    desc: '敵が通れる床。踏んだ地上の敵は速度×0.5（1.5秒）',
+    cost: 15, attack: 'none', passable: true, floor: { slow: { factor: 0.5, duration: 1.5 } },
+  },
+  holyfloor: {
+    genre: 'special', name: '聖域の床', short: '域',
+    desc: '敵が通れる床。踏んだアンデッドは3秒間被ダメージ1.5倍',
+    cost: 25, attack: 'none', passable: true, floor: { curse: { armorReduce: 0, damageTakenMul: 1.5, duration: 3.0 }, undeadOnly: true },
+  },
+  pitfall: {
+    genre: 'special', name: '落とし穴', short: '穴',
+    desc: '通れる罠。最初に踏んだ地上の敵を3秒拘束（ウェーブごとに1回）',
+    cost: 25, attack: 'none', passable: true, trap: { stun: { chance: 1, duration: 3.0 } },
+  },
+  landmine: {
+    genre: 'special', name: '地雷', short: '雷',
+    desc: '通れる罠。踏んだ瞬間に周囲1マスへ80ダメージ（ウェーブごとに1回）',
+    cost: 20, attack: 'none', passable: true, trap: { damage: 80, radius: 1.0, damageType: 'physical' },
+  },
+  manaforge: {
+    genre: 'special', name: '魔力炉', short: '炉',
+    desc: 'ウェーブ終了ごとに魔力+3。魔力でメテオ・全体凍結・修復が使える',
+    cost: 140, attack: 'none', manaPerWave: 3,
+  },
+  oilfloor: {
+    genre: 'special', name: '油溜まり', short: '油',
+    desc: '敵が通れる床。踏んだ敵は油まみれになり、炎属性の攻撃で引火爆発する',
+    cost: 18, attack: 'none', passable: true, floor: { oil: { duration: 6.0 } },
+  },
+  portal: {
+    genre: 'special', name: '転送門', short: '転',
+    desc: '2基で1組。片方に入った敵はもう片方へ飛ぶ（経路計算に組み込まれる）。敵が通れる',
+    cost: 60, attack: 'none', passable: true, portal: true, limit: 2,
+  },
+  drawbridge: {
+    genre: 'special', name: '跳ね橋', short: '跳',
+    desc: '準備中に開閉を切り替えられる壁。閉じると塞ぎ、開くと通れる。売買せずに経路を変える',
+    cost: 20, attack: 'none', toggleable: true,
+  },
+  blastkit: {
+    genre: 'special', name: '発破', short: '破',
+    desc: '岩の上にだけ使える。岩を1マス砕いて平地にする（使い切り）',
+    cost: 40, attack: 'none', placeOn: 'rock', convertsToLand: true,
+  },
+  pact: {
+    genre: 'special', name: '悪魔契約', short: '契',
+    desc: '建っている間、敵のHP+20%・撃破報酬+50%。1ステージ1基',
+    cost: 100, attack: 'none', limit: 1, pact: { enemyHpMul: 1.2, rewardMul: 1.5 },
+  },
+  casino: {
+    genre: 'special', name: '賭博場', short: '賭',
+    desc: 'ウェーブ終了時に所持金の10%を賭け、50%で2倍・50%で没収',
+    cost: 70, attack: 'none', gamble: { rate: 0.10, winChance: 0.5, winMul: 2 },
+  },
+  throne: {
+    genre: 'special', name: '王の玉座', short: '王',
+    desc: '1ステージ1基。全ての塔の攻撃+10%、ウェーブ終了ごとにライフ+1',
+    cost: 350, attack: 'none', limit: 1, buff: { range: 999, damageMul: 1.10 }, livesPerWave: 1,
   },
   pillar: {
     genre: 'special', name: '門柱', short: '門',
     desc: '壁として使え、すぐ隣の塔の射程+0.2',
-    cost: 25, attack: 'none', buff: { range: 1.0, rangeAdd: 0.2 },
+    cost: 25, attack: 'none', buff: { range: 1.0, rangeAdd: 0.2 }, breakable: true,
   },
   goldmine: {
     genre: 'special', name: '金鉱', short: '金',
@@ -364,8 +531,8 @@ export const TOWERS = {
   },
   market: {
     genre: 'special', name: '市場', short: '市',
-    desc: 'ウェーブ終了時に所持金の5%の利息（上限60）',
-    cost: 80, attack: 'none', interest: { rate: 0.05, cap: 60 },
+    desc: 'ウェーブ終了時に、使わずに残した所持金の10%の利息（上限なし）。貯めるほど伸びる',
+    cost: 80, attack: 'none', interest: { rate: 0.10, cap: 100000 },
   },
   seedling: {
     genre: 'special', name: '魔法の苗木', short: '苗',
@@ -389,8 +556,8 @@ export const TOWERS = {
   },
   inn: {
     genre: 'special', name: '商人の宿', short: '宿',
-    desc: '建っている間、売却の返金率が70%になる',
-    cost: 120, attack: 'none', sellRate: 0.7,
+    desc: '建っている間、売却の返金率が70%・壁は100%になる。迷路の作り直しが気軽に',
+    cost: 120, attack: 'none', sellRate: 0.7, wallSellRate: 1.0,
   },
   barracks: {
     genre: 'special', name: '練兵場', short: '練',
@@ -399,8 +566,8 @@ export const TOWERS = {
   },
   alchemy: {
     genre: 'special', name: '錬金炉', short: '錬',
-    desc: 'ウェーブ終了時に建物1つにつき+2ゴールド（上限80）',
-    cost: 180, attack: 'none', perTowerGold: { gold: 2, cap: 80 },
+    desc: 'ウェーブ終了時に建物1つにつき+2ゴールド（壁は数えない・上限60）',
+    cost: 180, attack: 'none', perTowerGold: { gold: 2, cap: 60 },
   },
   treasury: {
     genre: 'special', name: '宝物庫', short: '宝',
@@ -430,8 +597,16 @@ export const ENEMIES = {
   gargoyle:    { name: 'ガーゴイル',   hp: 60,   speed: 1.8, reward: 8,  livesCost: 1, flying: true, armor: 3 },
   troll:       { name: 'トロル',       hp: 320,  speed: 0.9, reward: 20, livesCost: 2, regen: 8 },
   dark_knight: { name: '暗黒騎士',     hp: 520,  speed: 1.3, reward: 30, livesCost: 2, armor: 10, undead: true },
-  demon_lord:  { name: '魔王',         hp: 3000, speed: 0.75, reward: 200, livesCost: 10,
-                 armor: 8, regen: 6, boss: true, slowResist: 0.5 },
+  demon_lord:  { name: '魔王',         hp: 5000, speed: 0.75, reward: 300, livesCost: 25,
+                 armor: 8, regen: 6, boss: true, slowResist: 0.5,
+                 summon: { type: 'bat', count: 2, every: 10 } },   // 10秒ごとにコウモリを召喚
+  // ---- 迷路に干渉する敵 ----
+  ogre_ram:    { name: '破城槌オーガ', hp: 260,  speed: 1.0, reward: 18, livesCost: 2,
+                 breakWalls: { range: 1.6, cooldown: 4.0 } },      // 近くの壊せる壁を壊して近道を作る
+  thief:       { name: '盗賊',         hp: 45,   speed: 3.0, reward: 12, livesCost: 0,
+                 stealGold: 15 },                                   // 到達するとライフの代わりにお金を奪う
+  necromancer: { name: 'ネクロマンサー', hp: 150, speed: 1.2, reward: 25, livesCost: 1, undead: true,
+                 revive: { range: 2.5, max: 3, type: 'skeleton', hpRatio: 0.5 } }, // 近くで倒れたアンデッドを蘇生
 };
 
 // ---- ウェーブ共通 ----
@@ -451,9 +626,12 @@ export const STAGES = [
     name: '草原の門',
     desc: '開けた草原。壁で迷路を作る基本を学ぼう',
     initialMoney: 150,
-    initialLives: 20,
+    initialLives: 15,
     map: { cols: 20, rows: 12, start: { x: 0, y: 5 }, goal: { x: 19, y: 5 } },
-    obstacles: [],
+    obstacles: [
+      { kind: 'hill', x: 6, y: 1, w: 2, h: 1 },
+      { kind: 'hill', x: 12, y: 10, w: 2, h: 1 },
+    ],
     waves: [
       w(1.0, g('goblin', 8, 1.0)),
       w(1.1, g('goblin', 12, 0.8)),
@@ -462,9 +640,9 @@ export const STAGES = [
       w(1.4, g('wolf', 16, 0.45)),
       w(1.5, g('goblin', 18, 0.6), g('orc', 6, 1.8, 3)),
       w(1.6, g('wolf', 20, 0.4), g('goblin', 10, 0.6, 5)),
-      w(2.2, g('orc', 10, 1.5), g('goblin', 16, 0.5, 2)),
-      w(2.6, g('wolf', 24, 0.35), g('orc', 12, 1.2, 4)),
-      w(3.2, g('orc', 30, 0.9), g('wolf', 10, 0.5, 10)),
+      w(1.9, g('orc', 10, 1.5), g('goblin', 16, 0.5, 2)),
+      w(2.3, g('wolf', 24, 0.35), g('orc', 12, 1.2, 4)),
+      w(2.8, g('orc', 30, 0.9), g('wolf', 10, 0.5, 10)),
     ],
   },
   {
@@ -472,7 +650,7 @@ export const STAGES = [
     name: '渓谷の道',
     desc: '岩に挟まれた細い谷。スライムとコウモリが現れる',
     initialMoney: 180,
-    initialLives: 20,
+    initialLives: 15,
     map: { cols: 22, rows: 13, start: { x: 0, y: 6 }, goal: { x: 21, y: 6 } },
     obstacles: [
       { kind: 'rock', x: 0, y: 0, w: 22, h: 1 },
@@ -491,9 +669,9 @@ export const STAGES = [
       w(1.4, g('slime', 10, 1.0), g('bat', 8, 0.5, 6)),
       w(1.5, g('orc', 6, 1.6), g('skeleton', 8, 1.0, 3)),
       w(1.6, g('wolf', 18, 0.4), g('gargoyle', 4, 1.5, 5)),
-      w(1.8, g('slime', 14, 0.8), g('skeleton', 10, 0.9, 4)),
+      w(1.8, g('ogre_ram', 2, 6.0), g('slime', 12, 0.8, 2), g('skeleton', 10, 0.9, 4)),
       w(2.0, g('bat', 20, 0.3), g('orc', 8, 1.4, 3)),
-      w(2.3, g('skeleton', 16, 0.7), g('gargoyle', 8, 1.2, 6)),
+      w(2.3, g('skeleton', 16, 0.7), g('ogre_ram', 3, 5.0, 3), g('gargoyle', 8, 1.2, 6)),
       w(2.7, g('orc', 14, 1.0), g('slime', 12, 0.8, 2), g('bat', 12, 0.4, 8)),
       w(3.2, g('troll', 6, 3.5), g('skeleton', 20, 0.6, 2), g('gargoyle', 10, 1.0, 10)),
     ],
@@ -503,7 +681,7 @@ export const STAGES = [
     name: '凍てつく湖',
     desc: '湖を迂回する長い道。トロルと暗黒騎士の重装部隊',
     initialMoney: 260,
-    initialLives: 20,
+    initialLives: 15,
     map: { cols: 24, rows: 14, start: { x: 0, y: 2 }, goal: { x: 23, y: 11 } },
     obstacles: [
       { kind: 'water', x: 8, y: 4, w: 8, h: 6 },
@@ -511,6 +689,8 @@ export const STAGES = [
       { kind: 'rock', x: 19, y: 0, w: 2, h: 5 },
       { kind: 'rock', x: 12, y: 0, w: 1, h: 2 },
       { kind: 'rock', x: 11, y: 12, w: 1, h: 2 },
+      { kind: 'hill', x: 6, y: 6, w: 1, h: 2 },
+      { kind: 'hill', x: 17, y: 6, w: 1, h: 2 },
     ],
     waves: [
       w(1.0, g('goblin', 10, 0.9)),
@@ -520,9 +700,9 @@ export const STAGES = [
       w(1.4, g('troll', 3, 4.0), g('wolf', 14, 0.45, 2)),
       w(1.5, g('skeleton', 14, 0.8), g('slime', 8, 1.2, 6)),
       w(1.6, g('dark_knight', 2, 5.0), g('orc', 8, 1.4, 2)),
-      w(1.8, g('bat', 24, 0.3), g('gargoyle', 10, 0.9, 6)),
-      w(2.0, g('troll', 6, 3.0), g('skeleton', 12, 0.8, 3)),
-      w(2.2, g('orc', 16, 1.0), g('slime', 14, 0.8, 4)),
+      w(1.8, g('thief', 8, 0.7), g('bat', 20, 0.3, 3), g('gargoyle', 10, 0.9, 6)),
+      w(2.0, g('troll', 6, 3.0), g('ogre_ram', 3, 5.0, 2), g('skeleton', 12, 0.8, 3)),
+      w(2.2, g('orc', 16, 1.0), g('thief', 10, 0.5, 4), g('slime', 14, 0.8, 4)),
       w(2.5, g('dark_knight', 5, 3.0), g('wolf', 20, 0.4, 2)),
       w(2.8, g('gargoyle', 16, 0.7), g('troll', 6, 2.5, 5)),
       w(3.2, g('skeleton', 24, 0.5), g('dark_knight', 6, 2.5, 8)),
@@ -545,6 +725,9 @@ export const STAGES = [
       { kind: 'rock', x: 20, y: 0, w: 1, h: 6 },
       { kind: 'rock', x: 20, y: 10, w: 1, h: 6 },
       { kind: 'rock', x: 16, y: 7, w: 2, h: 2 },
+      { kind: 'hill', x: 7, y: 2, w: 2, h: 1 },
+      { kind: 'hill', x: 7, y: 13, w: 2, h: 1 },
+      { kind: 'hill', x: 22, y: 7, w: 1, h: 2 },
     ],
     waves: [
       w(1.0, g('goblin', 12, 0.8), g('wolf', 6, 0.6, 6)),
@@ -553,13 +736,13 @@ export const STAGES = [
       w(1.3, g('orc', 6, 1.5), g('goblin', 14, 0.5, 2), g('gargoyle', 5, 1.2, 8)),
       w(1.4, g('troll', 4, 3.5), g('slime', 12, 0.9, 2)),
       w(1.5, g('dark_knight', 3, 4.0), g('skeleton', 12, 0.8, 2)),
-      w(1.6, g('wolf', 24, 0.35), g('bat', 16, 0.35, 6)),
-      w(1.8, g('orc', 14, 1.0), g('gargoyle', 10, 0.9, 4)),
+      w(1.6, g('wolf', 24, 0.35), g('thief', 8, 0.6, 4), g('bat', 16, 0.35, 6)),
+      w(1.8, g('orc', 14, 1.0), g('ogre_ram', 3, 5.0, 2), g('gargoyle', 10, 0.9, 4)),
       w(2.0, g('troll', 6, 3.0), g('dark_knight', 4, 3.5, 4)),
-      w(2.2, g('slime', 18, 0.7), g('skeleton', 16, 0.7, 4)),
+      w(2.2, g('necromancer', 2, 8.0), g('skeleton', 16, 0.7, 2), g('slime', 18, 0.7, 4)),
       w(2.5, g('demon_lord', 1, 1, 0), g('bat', 20, 0.4, 6)),
-      w(2.6, g('gargoyle', 18, 0.6), g('troll', 8, 2.5, 4)),
-      w(2.9, g('dark_knight', 8, 2.5), g('orc', 20, 0.8, 3)),
+      w(2.6, g('gargoyle', 18, 0.6), g('ogre_ram', 4, 4.0, 2), g('troll', 8, 2.5, 4)),
+      w(2.9, g('necromancer', 3, 6.0), g('dark_knight', 8, 2.5, 2), g('thief', 12, 0.5, 5), g('orc', 20, 0.8, 3)),
       w(3.2, g('skeleton', 30, 0.45), g('troll', 10, 2.0, 6), g('bat', 20, 0.3, 14)),
       w(3.6, g('dark_knight', 12, 2.0), g('gargoyle', 20, 0.6, 6)),
       w(3.6, g('demon_lord', 1, 1, 0), g('dark_knight', 8, 2.2, 4), g('troll', 10, 2.0, 10), g('slime', 20, 0.6, 20)),

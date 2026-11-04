@@ -110,9 +110,14 @@ test('強化は費用を払ってレベルが上がり、最大レベルで止�
   assert.equal(u1.level, 2);
   assert.equal(state.money, money - Math.round(base * UPGRADE.costMul[1]));
   money = state.money;
-  const u2 = upgradeTower(state, 2, 2);
+  // アーチャーは Lv3 で分岐があるので、分岐を指定しないと失敗する
+  const noBranch = upgradeTower(state, 2, 2);
+  assert.equal(noBranch.ok, false);
+  assert.match(noBranch.reason, /分岐/);
+  const u2 = upgradeTower(state, 2, 2, 'b');
   assert.equal(u2.ok, true);
   assert.equal(u2.level, 3);
+  assert.equal(u2.branch, 'b');
   assert.equal(state.money, money - Math.round(base * UPGRADE.costMul[2]));
   const u3 = upgradeTower(state, 2, 2);
   assert.equal(u3.ok, false);
@@ -126,7 +131,7 @@ test('強化は費用を払ってレベルが上がり、最大レベルで止�
 test('石壁は強化できない。お金不足でも強化できない', () => {
   const state = createState({ seed: 1 });
   assert.equal(placeTower(state, 2, 2, 'wall').ok, true);
-  assert.match(upgradeTower(state, 2, 2).reason, /石壁/);
+  assert.match(upgradeTower(state, 2, 2).reason, /壁/);
   assert.equal(placeTower(state, 3, 3, 'archer').ok, true);
   state.money = 0;
   assert.match(upgradeTower(state, 3, 3).reason, /お金/);

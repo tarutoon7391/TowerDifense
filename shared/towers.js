@@ -1,8 +1,9 @@
-// タワーのレベル別ステータス計算（config の値と UPGRADE 倍率から導出）
+// タワーのレベル別ステータス計算（config の値と UPGRADE 倍率、Lv3 分岐から導出）
 import { TOWERS, UPGRADE, COMBAT } from './config.js';
 
-// level（1始まり）でのステータスを返す。攻撃しないタワーは range/damage が undefined のまま
-export function getTowerStats(type, level = 1) {
+// level（1始まり）・branch（Lv3 分岐 'a'|'b'|null）でのステータスを返す
+// 攻撃しないタワーは range/damage が undefined のまま
+export function getTowerStats(type, level = 1, branch = null) {
   const def = TOWERS[type];
   const i = Math.max(0, Math.min(UPGRADE.maxLevel, level) - 1);
   const dmgMul = UPGRADE.damageMul[i];
@@ -10,6 +11,8 @@ export function getTowerStats(type, level = 1) {
   const stats = {
     type,
     level,
+    branch: null,
+    branchName: '',
     genre: def.genre,
     name: def.name,
     attack: def.attack,
@@ -28,7 +31,7 @@ export function getTowerStats(type, level = 1) {
     groundMul: def.groundMul || 1,
     bossMul: def.bossMul || 1,
     lineWidth: def.lineWidth || 0,
-    chain: def.chain || null,
+    chain: def.chain ? { ...def.chain } : null,
     multishot: def.multishot || 1,
     executeBelow: def.executeBelow || 0,
     ramp: def.ramp || null,
@@ -64,10 +67,51 @@ export function getTowerStats(type, level = 1) {
     bonusMul: def.bonusMul || 1,
     sellRate: def.sellRate || 0,
     upgradeDiscount: def.upgradeDiscount || 1,
-    bounty: def.bounty ? { range: def.bounty.range, gold: Math.round(def.bounty.gold * UPGRADE.incomeMul[i]) } : null,
+    bounty: def.bounty ? { range: def.bounty.range, gold: def.bounty.gold } : null, // 賞金は固定（強化で増えない）
     perTowerGold: def.perTowerGold || null,
     previewWaves: def.previewWaves || 0,
+    manaPerWave: def.manaPerWave ? Math.round(def.manaPerWave * UPGRADE.incomeMul[i]) : 0,
+    wallSellRate: def.wallSellRate || 0,
+    pact: def.pact || null,
+    gamble: def.gamble || null,
+    // 属性（状態反応に使う）
+    fire: !!def.fire,
+    shatter: !!def.shatter,
+    holy: !!def.holy,
+    ground: def.ground || null,
+    // 兵士・警鐘
+    units: def.units ? { count: def.units.count, hp: Math.round(def.units.hp * dmgMul), range: def.units.range } : null,
+    alarm: def.alarm || null,
+    // 床・罠・壁・転送門の性質
+    passable: !!def.passable,
+    floor: def.floor || null,
+    trap: def.trap || null,
+    breakable: !!def.breakable,
+    placeOn: def.placeOn || 'land',
+    convertsToLand: !!def.convertsToLand,
+    toggleable: !!def.toggleable,
+    portal: !!def.portal,
+    limit: def.limit || 0,
+    branches: def.branches || null,
   };
+
+  // Lv3 分岐の上書き
+  if (branch && def.branches && def.branches[branch] && level >= UPGRADE.maxLevel) {
+    const b = def.branches[branch];
+    const m = b.mods;
+    stats.branch = branch;
+    stats.branchName = b.name;
+    if (m.damageMul && stats.damage !== undefined) stats.damage = Math.round(stats.damage * m.damageMul);
+    if (m.cooldownMul && stats.cooldown !== undefined) stats.cooldown *= m.cooldownMul;
+    if (m.rangeAdd && stats.range !== undefined) stats.range += m.rangeAdd;
+    if (m.pierceArmor) stats.pierceArmor = true;
+    if (m.stun) stats.stun = m.stun;
+    if (m.splashRadius) stats.splashRadius = Math.max(stats.splashRadius, m.splashRadius);
+    if (m.splashMul) stats.splashRadius *= m.splashMul;
+    if (m.poison) stats.poison = { dps: Math.round(m.poison.dps * dmgMul), duration: m.poison.duration };
+    if (m.chainJumpsAdd && stats.chain) stats.chain.jumps += m.chainJumpsAdd;
+    if (m.chainDecay && stats.chain) stats.chain.decay = m.chainDecay;
+  }
   return stats;
 }
 
@@ -75,4 +119,9 @@ export function getTowerStats(type, level = 1) {
 export function upgradeCost(type, level) {
   if (level >= UPGRADE.maxLevel) return null;
   return Math.round(TOWERS[type].cost * UPGRADE.costMul[level]);
+}
+
+// 次の強化で分岐を選ぶ必要があるか
+export function needsBranchChoice(type, level) {
+  return !!TOWERS[type].branches && level + 1 === UPGRADE.maxLevel;
 }

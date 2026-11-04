@@ -1,6 +1,6 @@
 // ゲーム状態の生成
 // 状態はすべてプレーンなオブジェクト/配列/数値/文字列で構成し、JSON.stringify で丸ごと保存できる
-import { getStage, CELL_EMPTY, CELL_ROCK, CELL_WATER } from './config.js';
+import { getStage, CELL_EMPTY, CELL_ROCK, CELL_WATER, CELL_HILL } from './config.js';
 import { createRng } from './rng.js';
 import { computeFlowField } from './pathfinding.js';
 
@@ -26,8 +26,9 @@ export function inBounds(map, x, y) {
 function buildGrid(stage) {
   const { cols, rows } = stage.map;
   const grid = new Array(cols * rows).fill(CELL_EMPTY);
+  const kinds = { water: CELL_WATER, hill: CELL_HILL, rock: CELL_ROCK };
   for (const o of stage.obstacles) {
-    const v = o.kind === 'water' ? CELL_WATER : CELL_ROCK;
+    const v = kinds[o.kind] ?? CELL_ROCK;
     for (let y = o.y; y < o.y + o.h; y++) {
       for (let x = o.x; x < o.x + o.w; x++) {
         if (x < 0 || y < 0 || x >= cols || y >= rows) continue;
@@ -61,16 +62,21 @@ export function createState({ seed = 1, stageId = 'meadow' } = {}) {
     phase: PHASE.PREPARE,
     money: stage.initialMoney,
     lives: stage.initialLives,
+    mana: 0,              // 魔力炉で貯まる魔力（アクティブ魔法に使う）
     wave: 0,              // 開始済みウェーブ数（1始まり。0はまだ開始していない）
     grid,
-    towers: [],           // { id, x, y, type, level, cooldown, invested }
+    towers: [],           // { id, x, y, type, level, branch, cooldown, invested, builtWave, onHill, armed, ... }
     enemies: [],          // { id, type, x, y, hp, maxHp, ... }
     projectiles: [],      // { id, kind, x, y, speed, damage, targetId, tx, ty, ... }
     effects: [],          // 演出用の一時オブジェクト { kind, ttl, ... }（ロジックには影響しない）
     spawnQueue: [],       // { type, spawnTick, hpMul }（spawnTick昇順）
+    destroyed: [],        // このウェーブで壊された壁 { x, y, type }（修復魔法用）
+    pendingSpells: [],    // 使用が確定して次の step で効果を出す魔法 { id, x, y }
+    units: [],            // 兵舎・騎士団の兵士 { id, ownerId, x, y, hp, maxHp, deadAt }
+    lastGamble: null,     // 直近の賭博場の結果 { won, amount }（表示用）
     nextId: 1,
     flow: [],             // ゴールからの距離マップ（-1は到達不能）
-    stats: { kills: 0, leaked: 0, earned: 0 },
+    stats: { kills: 0, leaked: 0, earned: 0, stolen: 0, wallsBroken: 0, earlyCalls: 0 },
   };
   state.flow = computeFlowField(grid, map);
   return state;

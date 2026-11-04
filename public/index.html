@@ -17,6 +17,7 @@
       <div class="stats">
         <span class="stat"><span class="icon gold"></span>お金 <b id="money">0</b></span>
         <span class="stat"><span class="icon heart"></span>ライフ <b id="lives">0</b></span>
+        <span class="stat" id="manaStat" title="魔力炉で貯まる。魔法に使う"><span class="icon mana"></span>魔力 <b id="mana">0</b></span>
         <span class="stat">ウェーブ <b id="wave">0</b> / <span id="waveTotal">0</span></span>
         <span class="stat phase" id="phase">準備中</span>
       </div>
@@ -25,6 +26,7 @@
     <main>
       <div id="canvasWrap">
         <canvas id="game" width="800" height="480"></canvas>
+        <div id="pausedBadge" class="paused hidden">一時停止中（P で再開）</div>
       </div>
 
       <aside id="panel">
@@ -37,13 +39,19 @@
           <!-- タワー選択ボタンは main.js が config から生成する -->
         </div>
         <div id="toolDesc" class="tool-desc"></div>
-        <button id="sellBtn" class="tool sell">売却モード<small>投資額の50%返金</small></button>
+        <div class="row">
+          <button id="sellBtn" class="tool sell">売却モード<small id="sellRateLabel">投資額の50%返金</small></button>
+          <button id="undoBtn" class="small ghost" title="直前の建築・売却・強化を取り消す（準備中のみ）">元に戻す</button>
+        </div>
 
         <div id="towerInfo" class="tower-info hidden">
           <div class="ti-head"><b id="tiName"></b> <span id="tiLevel"></span></div>
           <div id="tiStats" class="ti-stats"></div>
           <div class="ti-actions">
             <button id="upgradeBtn" class="small primary">強化</button>
+            <button id="branchABtn" class="small primary hidden">A</button>
+            <button id="branchBBtn" class="small primary hidden">B</button>
+            <button id="toggleBtn" class="small hidden">開閉</button>
             <button id="sellSelectedBtn" class="small danger">売却</button>
           </div>
         </div>
@@ -51,6 +59,7 @@
         <h2>ウェーブ</h2>
         <div id="nextWave" class="next-wave"></div>
         <button id="startWaveBtn" class="primary">ウェーブ開始</button>
+        <button id="callWaveBtn" class="primary call hidden" title="敵が残っているうちに次を呼ぶと、残り1体につきボーナス">次のウェーブを呼ぶ（早回し）</button>
         <div class="speed-row">
           <span>速度</span>
           <div class="seg" id="speedSeg">
@@ -58,6 +67,12 @@
             <button data-speed="2">×2</button>
             <button data-speed="3">×3</button>
           </div>
+          <button id="pauseBtn" class="small ghost" title="P キー">一時停止</button>
+        </div>
+
+        <div id="spells" class="spells hidden">
+          <h2>魔法 <small>魔力を消費</small></h2>
+          <div id="spellButtons" class="row"></div>
         </div>
 
         <div id="message" class="message"></div>
@@ -66,14 +81,14 @@
 
         <h2>操作</h2>
         <ul class="help">
-          <li>左クリックで設置。石壁はドラッグで連続配置できる</li>
-          <li>建物をクリックすると選択（強化/売却）。塔も壁と同じく経路を塞ぐ</li>
-          <li>Tab でジャンル切替、1〜9 で表示中ジャンルの建築を選択</li>
-          <li>右クリック / Esc で選択解除、Space でウェーブ開始、U で強化</li>
-          <li>支援建築は範囲内の塔を強化する。同じ効果は重複せず最大だけ有効</li>
-          <li>敵は常に最短経路を進む。壁で迷路を作って足止めしよう</li>
-          <li>飛行する敵は迷路を無視して直進する（紫の破線）</li>
+          <li>左クリック / タップで設置。壁・床はドラッグで連続配置</li>
+          <li>建物をクリックすると選択（強化/分岐/売却/開閉）。塔も壁と同じく経路を塞ぐ</li>
+          <li>Tab でジャンル切替、1〜9・Q/W/E で建築選択、S 売却、U 強化、Space ウェーブ開始、P 一時停止、Z 元に戻す</li>
+          <li>敵は常に最短経路を進む。壁で迷路を作って足止めしよう。床は敵が通れる</li>
+          <li>飛行する敵は迷路を無視して直進する（紫の破線）。重力の塔で着地させられる</li>
           <li>鎧は物理ダメージを固定値で減らす。魔法・貫通は影響なし</li>
+          <li>支援建築は範囲内の塔を強化する。同じ効果は重複せず最大だけ有効</li>
+          <li>破城槌オーガは石壁を壊す（鉄壁は壊せない）。盗賊はお金を奪う</li>
         </ul>
       </aside>
     </main>
@@ -82,8 +97,29 @@
     <div id="stageSelect" class="overlay">
       <div class="overlay-box wide">
         <h2>ステージを選ぶ</h2>
-        <p class="sub">前のステージをクリアすると次が解放されます</p>
+        <p class="sub">前のステージをクリアすると次が解放されます。★は残ライフで決まります</p>
+        <div class="row center">
+          <label class="opt"><input type="checkbox" id="dailyToggle"> 今日の迷宮（日替わりシードで全員同じ配置・同じ変異）</label>
+          <label class="opt"><input type="checkbox" id="deckToggle"> ドラフト（各ジャンル3種から1つずつ選んで持ち込む）</label>
+        </div>
         <div id="stageCards" class="stage-cards"></div>
+        <div class="row center replay-row">
+          <input type="text" id="replayInput" placeholder="リプレイコードを貼り付け">
+          <button id="replayBtn" class="small">リプレイを見る</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ドラフト（デッキ選択） -->
+    <div id="draft" class="overlay hidden">
+      <div class="overlay-box wide">
+        <h2>持ち込む建築を選ぶ</h2>
+        <p class="sub">各ジャンルの候補から1つずつ。石壁はいつでも使えます</p>
+        <div id="draftRows"></div>
+        <div class="overlay-actions">
+          <button id="draftStartBtn" class="primary">このデッキで開始</button>
+          <button id="draftCancelBtn" class="ghost">やめる</button>
+        </div>
       </div>
     </div>
 
@@ -91,15 +127,19 @@
     <div id="overlay" class="overlay hidden">
       <div class="overlay-box">
         <h2 id="overlayTitle"></h2>
+        <div id="overlayStars" class="stars"></div>
         <p id="overlayBody"></p>
         <div class="overlay-actions">
           <button id="retryWaveBtn" class="primary hidden">このウェーブからやり直す</button>
           <button id="restartBtn" class="primary">最初から</button>
           <button id="nextStageBtn" class="primary hidden">次のステージへ</button>
+          <button id="shareBtn" class="small">リプレイコードをコピー</button>
           <button id="toSelectBtn" class="ghost">ステージ選択へ</button>
         </div>
       </div>
     </div>
+
+    <div id="replayBadge" class="paused hidden">リプレイ再生中（Esc で終了）</div>
   </div>
 
   <script type="module" src="js/main.js"></script>
