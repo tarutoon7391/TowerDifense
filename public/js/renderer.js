@@ -38,6 +38,11 @@ const ENEMY_COLORS = {
   troll:       { body: '#7a8a4a', edge: '#3c4522' },
   dark_knight: { body: '#3a2a4a', edge: '#120a1a' },
   demon_lord:  { body: '#8a1a1a', edge: '#2a0505' },
+  ogre_ram:    { body: '#7a6a4a', edge: '#3a3020' },
+  thief:       { body: '#2a2a33', edge: '#111' },
+  necromancer: { body: '#4a2a6a', edge: '#1a0a2a' },
+  golem:       { body: '#6e6a62', edge: '#2a2824' },
+  shade:       { body: 'rgba(40, 30, 60, 0.85)', edge: '#9a7fd0' },
 };
 
 // 決定的な擬似ハッシュ（草の模様の配置に使う。乱数は使わない）
@@ -925,6 +930,33 @@ function drawEnemy(ctx, e, state_waveTick) {
       ctx.fillRect(px - 8 * s, py - 4 * s, 5 * s, 3 * s);
       ctx.fillRect(px + 3 * s, py - 4 * s, 5 * s, 3 * s);
       break;
+    case 'golem':
+      // 角ばった岩の巨人（ひび割れ入り）
+      ctx.beginPath();
+      ctx.roundRect(px - 17 * s, py - 16 * s, 34 * s, 32 * s, 6 * s);
+      ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = '#3a3630';
+      ctx.beginPath();
+      ctx.moveTo(px - 8 * s, py - 12 * s); ctx.lineTo(px - 2 * s, py - 2 * s); ctx.lineTo(px - 9 * s, py + 8 * s);
+      ctx.moveTo(px + 6 * s, py - 14 * s); ctx.lineTo(px + 9 * s, py + 2 * s);
+      ctx.stroke();
+      ctx.fillStyle = '#ffb347';
+      ctx.fillRect(px - 8 * s, py - 5 * s, 5 * s, 3 * s);
+      ctx.fillRect(px + 3 * s, py - 5 * s, 5 * s, 3 * s);
+      break;
+    case 'shade':
+      // 尾を引く半透明の影
+      ctx.beginPath();
+      ctx.moveTo(px, py - 12 * s);
+      ctx.quadraticCurveTo(px + 12 * s, py - 2 * s, px + 4 * s, py + 12 * s);
+      ctx.quadraticCurveTo(px, py + 4 * s, px - 4 * s, py + 12 * s);
+      ctx.quadraticCurveTo(px - 12 * s, py - 2 * s, px, py - 12 * s);
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#d98cff';
+      ctx.fillRect(px - 4 * s, py - 3 * s, 2.5 * s, 2.5 * s);
+      ctx.fillRect(px + 1.5 * s, py - 3 * s, 2.5 * s, 2.5 * s);
+      break;
     case 'ogre_ram':
       // 破城槌を担いだ大柄なオーガ
       ctx.fillStyle = '#7a6a4a';
@@ -1252,7 +1284,7 @@ export function drawMiniMap(canvas, stage) {
   ctx.fillStyle = '#4a8a42';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   for (const o of stage.obstacles) {
-    ctx.fillStyle = o.kind === 'water' ? '#3b78b5' : '#6c665c';
+    ctx.fillStyle = o.kind === 'water' ? '#3b78b5' : o.kind === 'hill' ? '#b8a46a' : '#6c665c';
     ctx.fillRect(o.x * cell, o.y * cell, o.w * cell, o.h * cell);
   }
   ctx.fillStyle = '#b86bff';
