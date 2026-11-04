@@ -20,7 +20,7 @@ body {
 }
 
 #app {
-  max-width: 1100px;
+  max-width: 1240px;
   margin: 0 auto;
   padding: 12px 16px 24px;
 }
@@ -37,12 +37,14 @@ body {
   margin-bottom: 12px;
 }
 
+.title-block { display: flex; align-items: baseline; gap: 12px; }
 #hud h1 {
   margin: 0;
   font-size: 20px;
   letter-spacing: 2px;
   color: var(--gold);
 }
+.stage-name { color: var(--muted); font-size: 14px; }
 
 .stats { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
 .stat { font-size: 15px; }
@@ -73,6 +75,7 @@ main {
   flex-wrap: wrap;
 }
 
+#canvasWrap { flex: 1 1 760px; min-width: 0; }
 #game {
   display: block;
   border: 3px solid #5a5236;
@@ -80,11 +83,12 @@ main {
   background: #3f7a3a;
   cursor: crosshair;
   max-width: 100%;
+  height: auto;
 }
 
 #panel {
-  width: 260px;
-  flex: 1 0 220px;
+  width: 290px;
+  flex: 0 0 290px;
   background: var(--panel);
   border: 2px solid #4b4670;
   border-radius: 10px;
@@ -94,13 +98,11 @@ main {
 #panel h2 {
   font-size: 13px;
   color: var(--muted);
-  margin: 10px 0 6px;
+  margin: 12px 0 6px;
   letter-spacing: 1px;
   text-transform: uppercase;
 }
 #panel h2:first-child { margin-top: 0; }
-
-.buttons { display: flex; flex-direction: column; gap: 6px; }
 
 button {
   font-family: inherit;
@@ -119,17 +121,52 @@ button:hover { background: #474380; }
 button:disabled { opacity: 0.45; cursor: not-allowed; }
 button small { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
 
-button.tool { display: flex; align-items: center; gap: 10px; }
-button.tool .swatch {
-  width: 22px; height: 22px; flex: none;
-  border-radius: 4px;
-  border: 1px solid rgba(255,255,255,0.3);
+/* タワー選択グリッド */
+.tower-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
 }
-button.tool .label { flex: 1; }
-button.tool .cost { color: var(--gold); font-weight: bold; }
+.tower-grid button.tool {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 6px 4px;
+  text-align: center;
+}
+.tower-grid .swatch {
+  width: 26px; height: 26px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.35);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: bold; color: #fff;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.7);
+}
+.tower-grid .label { font-size: 11px; line-height: 1.2; }
+.tower-grid .cost { color: var(--gold); font-weight: bold; font-size: 12px; }
 button.tool.active { border-color: var(--gold); background: #4f4a2d; }
+.tool-desc { min-height: 30px; font-size: 12px; color: var(--muted); margin: 6px 2px 0; line-height: 1.4; }
+
 button.sell { margin-top: 6px; }
 button.sell.active { border-color: var(--danger); background: #5a2f2f; }
+
+/* 選択中の建物 */
+.tower-info {
+  margin-top: 8px;
+  padding: 8px;
+  border-radius: 8px;
+  background: #22203a;
+  border: 1px solid #4b4670;
+}
+.tower-info.hidden { display: none; }
+.ti-head { display: flex; justify-content: space-between; font-size: 14px; }
+.ti-head span { color: var(--gold); }
+.ti-stats { font-size: 12px; color: var(--muted); margin: 4px 0 6px; line-height: 1.5; white-space: pre-wrap; }
+.ti-actions { display: flex; gap: 6px; }
+button.small { padding: 6px 8px; font-size: 13px; text-align: center; }
+button.danger { background: #5a2f2f; border-color: #8a4040; }
+button.danger:hover { background: #6e3a3a; }
 
 button.primary {
   background: #3e6b3a;
@@ -139,8 +176,18 @@ button.primary {
   font-size: 16px;
 }
 button.primary:hover { background: #4b8046; }
+button.ghost { background: transparent; border-color: #4b4670; text-align: center; font-size: 13px; margin-top: 10px; }
 
-.speed { display: block; margin-top: 8px; font-size: 13px; color: var(--muted); }
+.next-wave { font-size: 12px; color: var(--muted); margin-bottom: 6px; min-height: 18px; line-height: 1.5; }
+.next-wave b { color: var(--text); }
+.next-wave .boss { color: #ff8080; font-weight: bold; }
+
+.speed-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px; color: var(--muted); }
+.seg { display: flex; gap: 0; }
+.seg button { width: auto; padding: 4px 10px; border-radius: 0; font-size: 12px; text-align: center; }
+.seg button:first-child { border-radius: 6px 0 0 6px; }
+.seg button:last-child { border-radius: 0 6px 6px 0; }
+.seg button.active { background: #4f4a2d; border-color: var(--gold); }
 
 .message {
   min-height: 40px;
@@ -157,10 +204,12 @@ button.primary:hover { background: #4b8046; }
 
 .help { margin: 0; padding-left: 18px; font-size: 12px; color: var(--muted); line-height: 1.6; }
 
+/* オーバーレイ */
 .overlay {
   position: fixed; inset: 0;
-  background: rgba(0,0,0,0.65);
+  background: rgba(0,0,0,0.7);
   display: flex; align-items: center; justify-content: center;
+  z-index: 10;
 }
 .overlay.hidden { display: none; }
 .overlay-box {
@@ -170,6 +219,38 @@ button.primary:hover { background: #4b8046; }
   padding: 28px 36px;
   text-align: center;
   min-width: 320px;
+  max-width: 92vw;
 }
+.overlay-box.wide { min-width: 640px; }
 .overlay-box h2 { margin: 0 0 8px; font-size: 28px; color: var(--gold); }
 .overlay-box p { color: var(--muted); margin: 0 0 18px; white-space: pre-wrap; }
+.overlay-box p.sub { font-size: 13px; }
+.overlay-actions { display: flex; gap: 8px; justify-content: center; }
+.overlay-actions button { width: auto; min-width: 140px; }
+.overlay-actions .hidden { display: none; }
+
+/* ステージカード */
+.stage-cards {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  text-align: left;
+}
+.stage-card {
+  background: #22203a;
+  border: 2px solid #4b4670;
+  border-radius: 10px;
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: border-color 0.1s, transform 0.1s;
+}
+.stage-card:hover { border-color: var(--gold); transform: translateY(-2px); }
+.stage-card.locked { opacity: 0.5; cursor: not-allowed; }
+.stage-card.locked:hover { border-color: #4b4670; transform: none; }
+.stage-card h3 { margin: 0 0 4px; font-size: 17px; color: var(--text); }
+.stage-card h3 small { color: var(--muted); font-weight: normal; font-size: 12px; margin-left: 6px; }
+.stage-card .desc { font-size: 12px; color: var(--muted); margin: 0 0 8px; line-height: 1.5; }
+.stage-card .meta { font-size: 12px; color: var(--muted); display: flex; gap: 10px; flex-wrap: wrap; }
+.stage-card .badge { color: #c8f0c0; background: #28402a; padding: 1px 8px; border-radius: 999px; }
+.stage-card .lock { color: #ffb3b3; }
+.stage-card canvas { display: block; width: 100%; height: auto; border-radius: 6px; margin-bottom: 8px; border: 1px solid #3f3c5a; }

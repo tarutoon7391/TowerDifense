@@ -4,53 +4,91 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>迷宮の守護者 - 迷路建築タワーディフェンス</title>
+  <link rel="icon" href="data:,">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div id="app">
     <header id="hud">
-      <h1>迷宮の守護者</h1>
+      <div class="title-block">
+        <h1>迷宮の守護者</h1>
+        <span id="stageName" class="stage-name"></span>
+      </div>
       <div class="stats">
         <span class="stat"><span class="icon gold"></span>お金 <b id="money">0</b></span>
         <span class="stat"><span class="icon heart"></span>ライフ <b id="lives">0</b></span>
-        <span class="stat">ウェーブ <b id="wave">0</b> / <span id="waveTotal">10</span></span>
+        <span class="stat">ウェーブ <b id="wave">0</b> / <span id="waveTotal">0</span></span>
         <span class="stat phase" id="phase">準備中</span>
       </div>
     </header>
 
     <main>
-      <canvas id="game" width="800" height="480"></canvas>
+      <div id="canvasWrap">
+        <canvas id="game" width="800" height="480"></canvas>
+      </div>
 
       <aside id="panel">
         <h2>建築</h2>
-        <div id="towerButtons" class="buttons">
+        <div id="towerButtons" class="tower-grid">
           <!-- タワー選択ボタンは main.js が config から生成する -->
         </div>
-        <button id="sellBtn" class="tool sell">売却モード<small>建設費の50%返金</small></button>
+        <div id="toolDesc" class="tool-desc"></div>
+        <button id="sellBtn" class="tool sell">売却モード<small>投資額の50%返金</small></button>
+
+        <div id="towerInfo" class="tower-info hidden">
+          <div class="ti-head"><b id="tiName"></b> <span id="tiLevel"></span></div>
+          <div id="tiStats" class="ti-stats"></div>
+          <div class="ti-actions">
+            <button id="upgradeBtn" class="small primary">強化</button>
+            <button id="sellSelectedBtn" class="small danger">売却</button>
+          </div>
+        </div>
 
         <h2>ウェーブ</h2>
+        <div id="nextWave" class="next-wave"></div>
         <button id="startWaveBtn" class="primary">ウェーブ開始</button>
-        <label class="speed">
-          <input type="checkbox" id="speedToggle"> 2倍速
-        </label>
+        <div class="speed-row">
+          <span>速度</span>
+          <div class="seg" id="speedSeg">
+            <button data-speed="1" class="active">×1</button>
+            <button data-speed="2">×2</button>
+            <button data-speed="3">×3</button>
+          </div>
+        </div>
 
         <div id="message" class="message"></div>
 
+        <button id="backBtn" class="ghost">ステージ選択へ戻る</button>
+
         <h2>操作</h2>
         <ul class="help">
-          <li>左クリックで設置 / 売却</li>
-          <li>右クリックで選択解除</li>
-          <li>敵は常に最短経路を進むので、壁で迷路を作って足止めしよう</li>
-          <li>経路を完全に塞ぐ配置はできない</li>
+          <li>左クリックで設置。建物をクリックすると選択（強化/売却）</li>
+          <li>右クリック / Esc で選択解除、Space でウェーブ開始</li>
+          <li>敵は常に最短経路を進む。壁で迷路を作って足止めしよう</li>
+          <li>飛行する敵は迷路を無視して直進する</li>
         </ul>
       </aside>
     </main>
 
+    <!-- ステージ選択 -->
+    <div id="stageSelect" class="overlay">
+      <div class="overlay-box wide">
+        <h2>ステージを選ぶ</h2>
+        <p class="sub">前のステージをクリアすると次が解放されます</p>
+        <div id="stageCards" class="stage-cards"></div>
+      </div>
+    </div>
+
+    <!-- 終了画面 -->
     <div id="overlay" class="overlay hidden">
       <div class="overlay-box">
         <h2 id="overlayTitle"></h2>
         <p id="overlayBody"></p>
-        <button id="restartBtn" class="primary">もう一度遊ぶ</button>
+        <div class="overlay-actions">
+          <button id="restartBtn" class="primary">もう一度</button>
+          <button id="nextStageBtn" class="primary hidden">次のステージへ</button>
+          <button id="toSelectBtn" class="ghost">ステージ選択へ</button>
+        </div>
       </div>
     </div>
   </div>

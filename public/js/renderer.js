@@ -1,23 +1,39 @@
 // Canvas 2D 描画。外部画像は使わず、すべて図形で描く
 // 状態（state）は読むだけで、書き換えは一切しない
-import { MAP, TOWERS, ENEMIES } from '/shared/config.js';
+import { TOWERS, ENEMIES, CELL_ROCK, CELL_WATER, CELL_EMPTY } from '/shared/config.js';
 import { PHASE } from '/shared/state.js';
 import { computePath } from '/shared/pathfinding.js';
+import { getTowerStats } from '/shared/towers.js';
 
-export const CELL = 40; // 1マスのピクセル数
+// 1マスのピクセル数（ステージごとに main.js が設定する）
+export const layout = { cell: 40 };
 
 // タワーの表示色（種別ごと）
 export const TOWER_COLORS = {
-  archer: { main: '#8b5a2b', sub: '#5c3a17', accent: '#d9b382' },
-  ice: { main: '#7fd8f5', sub: '#3aa6c9', accent: '#e6fbff' },
-  catapult: { main: '#e2552c', sub: '#8a2e12', accent: '#ffb347' },
+  wall:      { main: '#8d8a80', sub: '#5c5a52', accent: '#b5b1a5' },
+  archer:    { main: '#8b5a2b', sub: '#5c3a17', accent: '#d9b382' },
+  ice:       { main: '#7fd8f5', sub: '#3aa6c9', accent: '#e6fbff' },
+  poison:    { main: '#7bbf3a', sub: '#3f6b1c', accent: '#c9ff7a' },
+  ballista:  { main: '#6b4a2e', sub: '#3a2817', accent: '#c0c6cc' },
+  catapult:  { main: '#e2552c', sub: '#8a2e12', accent: '#ffb347' },
+  lightning: { main: '#f4e04d', sub: '#9a8a1a', accent: '#ffffff' },
+  holy:      { main: '#f7e7b0', sub: '#c9a84a', accent: '#ffffff' },
+  goldmine:  { main: '#caa03a', sub: '#6a5420', accent: '#ffe48a' },
 };
 
 // 敵の表示色
 const ENEMY_COLORS = {
-  goblin: { body: '#5aa84a', edge: '#2d5a24' },
-  wolf: { body: '#9a9aa6', edge: '#4a4a55' },
-  orc: { body: '#3f6b3a', edge: '#1e331b' },
+  goblin:      { body: '#5aa84a', edge: '#2d5a24' },
+  wolf:        { body: '#9a9aa6', edge: '#4a4a55' },
+  orc:         { body: '#3f6b3a', edge: '#1e331b' },
+  slime:       { body: 'rgba(90, 200, 120, 0.85)', edge: '#2e7a4a' },
+  slime_small: { body: 'rgba(120, 220, 140, 0.85)', edge: '#2e7a4a' },
+  bat:         { body: '#4a3a5c', edge: '#1e1428' },
+  skeleton:    { body: '#ece7d8', edge: '#6e6a5e' },
+  gargoyle:    { body: '#7d7f8a', edge: '#3a3b42' },
+  troll:       { body: '#7a8a4a', edge: '#3c4522' },
+  dark_knight: { body: '#3a2a4a', edge: '#120a1a' },
+  demon_lord:  { body: '#8a1a1a', edge: '#2a0505' },
 };
 
 // 決定的な擬似ハッシュ（草の模様の配置に使う。乱数は使わない）
@@ -28,39 +44,44 @@ function hash(x, y) {
 }
 
 export function render(ctx, state, ui) {
-  const w = MAP.cols * CELL;
-  const h = MAP.rows * CELL;
-  ctx.clearRect(0, 0, w, h);
+  const C = layout.cell;
+  const { cols, rows } = state.map;
+  ctx.clearRect(0, 0, cols * C, rows * C);
 
-  drawGround(ctx);
-  drawGrid(ctx);
+  drawGround(ctx, state.map);
+  drawGrid(ctx, state.map);
+  drawObstacles(ctx, state);
   if (state.phase === PHASE.PREPARE) drawPath(ctx, state);
-  drawStartGoal(ctx);
-  for (const t of state.towers) drawTower(ctx, t.x, t.y, t.type, 1);
-  for (const e of state.enemies) drawEnemy(ctx, e);
+  drawStartGoal(ctx, state.map);
+  for (const t of state.towers) drawTower(ctx, t.x, t.y, t.type, 1, t.level);
+  for (const fx of state.effects) drawEffect(ctx, fx);
+  // 地上の敵 → 弾 → 飛行の敵 の順で重ねる
+  for (const e of state.enemies) if (!e.flying) drawEnemy(ctx, e);
   for (const p of state.projectiles) drawProjectile(ctx, p);
+  for (const e of state.enemies) if (e.flying) drawEnemy(ctx, e);
+  drawSelection(ctx, state, ui);
   drawHover(ctx, state, ui);
 }
 
 // 草原の地面
-function drawGround(ctx) {
-  const w = MAP.cols * CELL;
-  const h = MAP.rows * CELL;
+function drawGround(ctx, map) {
+  const C = layout.cell;
+  const w = map.cols * C;
+  const h = map.rows * C;
   const grad = ctx.createLinearGradient(0, 0, 0, h);
   grad.addColorStop(0, '#4f8f46');
   grad.addColorStop(1, '#3d7636');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, w, h);
 
-  // 草の模様（マスごとに決定的な位置）
   ctx.strokeStyle = 'rgba(120, 190, 100, 0.55)';
   ctx.lineWidth = 1.5;
-  for (let y = 0; y < MAP.rows; y++) {
-    for (let x = 0; x < MAP.cols; x++) {
+  for (let y = 0; y < map.rows; y++) {
+    for (let x = 0; x < map.cols; x++) {
       const r = hash(x, y);
       if (r < 0.35) continue;
-      const px = x * CELL + 6 + r * 26;
-      const py = y * CELL + 8 + hash(y, x) * 24;
+      const px = x * C + C * 0.15 + r * C * 0.65;
+      const py = y * C + C * 0.2 + hash(y, x) * C * 0.6;
       ctx.beginPath();
       ctx.moveTo(px, py + 5);
       ctx.lineTo(px + 2, py - 2);
@@ -72,28 +93,95 @@ function drawGround(ctx) {
 }
 
 // 石畳風のグリッド線
-function drawGrid(ctx) {
-  const w = MAP.cols * CELL;
-  const h = MAP.rows * CELL;
+function drawGrid(ctx, map) {
+  const C = layout.cell;
+  const w = map.cols * C;
+  const h = map.rows * C;
   ctx.strokeStyle = 'rgba(230, 220, 190, 0.18)';
   ctx.lineWidth = 1;
-  for (let x = 0; x <= MAP.cols; x++) {
+  for (let x = 0; x <= map.cols; x++) {
     ctx.beginPath();
-    ctx.moveTo(x * CELL + 0.5, 0);
-    ctx.lineTo(x * CELL + 0.5, h);
+    ctx.moveTo(x * C + 0.5, 0);
+    ctx.lineTo(x * C + 0.5, h);
     ctx.stroke();
   }
-  for (let y = 0; y <= MAP.rows; y++) {
+  for (let y = 0; y <= map.rows; y++) {
     ctx.beginPath();
-    ctx.moveTo(0, y * CELL + 0.5);
-    ctx.lineTo(w, y * CELL + 0.5);
+    ctx.moveTo(0, y * C + 0.5);
+    ctx.lineTo(w, y * C + 0.5);
+    ctx.stroke();
+  }
+}
+
+// 岩と水
+function drawObstacles(ctx, state) {
+  const C = layout.cell;
+  const { cols, rows } = state.map;
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      const v = state.grid[y * cols + x];
+      if (v === CELL_ROCK) drawRock(ctx, x, y);
+      else if (v === CELL_WATER) drawWater(ctx, x, y, state.grid, cols, rows);
+    }
+  }
+}
+
+function drawRock(ctx, x, y) {
+  const C = layout.cell;
+  const px = x * C;
+  const py = y * C;
+  ctx.fillStyle = '#6c665c';
+  ctx.fillRect(px, py, C, C);
+  // ごつごつした塊
+  const r = hash(x + 100, y + 100);
+  ctx.fillStyle = '#8a8378';
+  ctx.beginPath();
+  ctx.moveTo(px + C * 0.15, py + C * 0.75);
+  ctx.lineTo(px + C * 0.3, py + C * (0.3 + r * 0.15));
+  ctx.lineTo(px + C * 0.55, py + C * 0.2);
+  ctx.lineTo(px + C * 0.85, py + C * (0.45 - r * 0.1));
+  ctx.lineTo(px + C * 0.9, py + C * 0.8);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#524d45';
+  ctx.beginPath();
+  ctx.moveTo(px + C * 0.15, py + C * 0.75);
+  ctx.lineTo(px + C * 0.9, py + C * 0.8);
+  ctx.lineTo(px + C * 0.85, py + C * 0.9);
+  ctx.lineTo(px + C * 0.2, py + C * 0.9);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawWater(ctx, x, y, grid, cols, rows) {
+  const C = layout.cell;
+  const px = x * C;
+  const py = y * C;
+  ctx.fillStyle = '#3b78b5';
+  ctx.fillRect(px, py, C, C);
+  // 岸（隣が水でない辺）を明るく
+  ctx.fillStyle = 'rgba(190, 230, 255, 0.55)';
+  const isWater = (nx, ny) => nx >= 0 && ny >= 0 && nx < cols && ny < rows && grid[ny * cols + nx] === CELL_WATER;
+  if (!isWater(x, y - 1)) ctx.fillRect(px, py, C, 3);
+  if (!isWater(x, y + 1)) ctx.fillRect(px, py + C - 3, C, 3);
+  if (!isWater(x - 1, y)) ctx.fillRect(px, py, 3, C);
+  if (!isWater(x + 1, y)) ctx.fillRect(px + C - 3, py, 3, C);
+  // さざ波
+  if (hash(x + 7, y + 3) > 0.5) {
+    ctx.strokeStyle = 'rgba(220, 240, 255, 0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(px + C * 0.25, py + C * 0.5);
+    ctx.quadraticCurveTo(px + C * 0.4, py + C * 0.4, px + C * 0.55, py + C * 0.5);
+    ctx.quadraticCurveTo(px + C * 0.7, py + C * 0.6, px + C * 0.8, py + C * 0.5);
     ctx.stroke();
   }
 }
 
 // 準備フェーズ中: 現在の最短経路を薄く表示
 function drawPath(ctx, state) {
-  const path = computePath(state.flow);
+  const C = layout.cell;
+  const path = computePath(state.flow, state.map);
   if (path.length < 2) return;
   ctx.save();
   ctx.strokeStyle = 'rgba(255, 240, 180, 0.45)';
@@ -103,8 +191,8 @@ function drawPath(ctx, state) {
   ctx.setLineDash([10, 8]);
   ctx.beginPath();
   path.forEach((c, i) => {
-    const px = c.x * CELL + CELL / 2;
-    const py = c.y * CELL + CELL / 2;
+    const px = c.x * C + C / 2;
+    const py = c.y * C + C / 2;
     if (i === 0) ctx.moveTo(px, py);
     else ctx.lineTo(px, py);
   });
@@ -113,76 +201,92 @@ function drawPath(ctx, state) {
 }
 
 // スタート（魔物の門）とゴール（城）
-function drawStartGoal(ctx) {
-  // 門: 紫の石アーチ
+function drawStartGoal(ctx, map) {
+  const C = layout.cell;
   {
-    const px = MAP.start.x * CELL;
-    const py = MAP.start.y * CELL;
+    const px = map.start.x * C;
+    const py = map.start.y * C;
     ctx.fillStyle = '#4a2f5c';
-    ctx.fillRect(px + 4, py + 6, CELL - 8, CELL - 8);
+    ctx.fillRect(px + 4, py + 6, C - 8, C - 8);
     ctx.fillStyle = '#1b0f24';
     ctx.beginPath();
-    ctx.arc(px + CELL / 2, py + CELL / 2 + 2, 10, Math.PI, 0);
-    ctx.lineTo(px + CELL / 2 + 10, py + CELL - 4);
-    ctx.lineTo(px + CELL / 2 - 10, py + CELL - 4);
+    ctx.arc(px + C / 2, py + C / 2 + 2, C * 0.25, Math.PI, 0);
+    ctx.lineTo(px + C / 2 + C * 0.25, py + C - 4);
+    ctx.lineTo(px + C / 2 - C * 0.25, py + C - 4);
     ctx.closePath();
     ctx.fill();
     ctx.fillStyle = '#b86bff';
     ctx.beginPath();
-    ctx.arc(px + CELL / 2, py + CELL / 2 + 4, 4, 0, Math.PI * 2);
+    ctx.arc(px + C / 2, py + C / 2 + 4, 4, 0, Math.PI * 2);
     ctx.fill();
   }
-  // 城: 灰色の塔と城壁
   {
-    const px = MAP.goal.x * CELL;
-    const py = MAP.goal.y * CELL;
+    const px = map.goal.x * C;
+    const py = map.goal.y * C;
     ctx.fillStyle = '#9b9b9b';
-    ctx.fillRect(px + 4, py + 12, CELL - 8, CELL - 14);
+    ctx.fillRect(px + 4, py + C * 0.3, C - 8, C * 0.65);
     ctx.fillStyle = '#c9c9c9';
-    for (let i = 0; i < 4; i++) ctx.fillRect(px + 4 + i * 9, py + 6, 6, 8);
+    for (let i = 0; i < 4; i++) ctx.fillRect(px + 4 + i * (C - 8) / 4 + 1, py + 6, (C - 8) / 4 - 3, 8);
     ctx.fillStyle = '#5a3b1e';
-    ctx.fillRect(px + CELL / 2 - 5, py + 24, 10, 12);
+    ctx.fillRect(px + C / 2 - 5, py + C * 0.6, 10, C * 0.35);
     ctx.fillStyle = '#d33';
     ctx.beginPath();
-    ctx.moveTo(px + CELL / 2, py + 2);
-    ctx.lineTo(px + CELL / 2 + 9, py + 5);
-    ctx.lineTo(px + CELL / 2, py + 8);
+    ctx.moveTo(px + C / 2, py + 2);
+    ctx.lineTo(px + C / 2 + 9, py + 5);
+    ctx.lineTo(px + C / 2, py + 8);
     ctx.closePath();
     ctx.fill();
   }
 }
 
-// タワー。alpha はプレビュー用の透明度
-export function drawTower(ctx, x, y, type, alpha) {
+// タワー。alpha はプレビュー用の透明度、level でレベル表示
+export function drawTower(ctx, x, y, type, alpha, level = 1) {
+  const C = layout.cell;
   const c = TOWER_COLORS[type];
-  const px = x * CELL;
-  const py = y * CELL;
-  const cx = px + CELL / 2;
-  const cy = py + CELL / 2;
+  const px = x * C;
+  const py = y * C;
+  const cx = px + C / 2;
+  const cy = py + C / 2;
   ctx.save();
   ctx.globalAlpha = alpha;
+
+  if (type === 'wall') {
+    // 石積みの壁
+    ctx.fillStyle = c.main;
+    ctx.fillRect(px + 2, py + 2, C - 4, C - 4);
+    ctx.strokeStyle = c.sub;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(px + 2, py + 2, C - 4, C - 4);
+    ctx.beginPath();
+    ctx.moveTo(px + 2, cy); ctx.lineTo(px + C - 2, cy);
+    ctx.moveTo(cx, py + 2); ctx.lineTo(cx, cy);
+    ctx.moveTo(px + C * 0.25, cy); ctx.lineTo(px + C * 0.25, py + C - 2);
+    ctx.moveTo(px + C * 0.75, cy); ctx.lineTo(px + C * 0.75, py + C - 2);
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
+
   // 石の土台
   ctx.fillStyle = '#6e6a5e';
-  ctx.fillRect(px + 3, py + 3, CELL - 6, CELL - 6);
+  ctx.fillRect(px + 3, py + 3, C - 6, C - 6);
   ctx.strokeStyle = '#3f3c34';
   ctx.lineWidth = 2;
-  ctx.strokeRect(px + 3, py + 3, CELL - 6, CELL - 6);
+  ctx.strokeRect(px + 3, py + 3, C - 6, C - 6);
 
   if (type === 'archer') {
-    // 茶色の塔 + 狭間
     ctx.fillStyle = c.main;
-    ctx.fillRect(px + 10, py + 12, CELL - 20, CELL - 16);
+    ctx.fillRect(px + C * 0.25, py + C * 0.3, C * 0.5, C * 0.6);
     ctx.fillStyle = c.sub;
-    for (let i = 0; i < 3; i++) ctx.fillRect(px + 10 + i * 7, py + 8, 5, 6);
+    for (let i = 0; i < 3; i++) ctx.fillRect(px + C * 0.25 + i * C * 0.18, py + C * 0.2, C * 0.12, C * 0.15);
     ctx.fillStyle = c.accent;
-    ctx.fillRect(cx - 2, py + 20, 4, 8);
+    ctx.fillRect(cx - 2, py + C * 0.5, 4, C * 0.2);
   } else if (type === 'ice') {
-    // 水色の結晶（ひし形）
     ctx.fillStyle = c.main;
     ctx.beginPath();
     ctx.moveTo(cx, py + 6);
-    ctx.lineTo(px + CELL - 10, cy);
-    ctx.lineTo(cx, py + CELL - 6);
+    ctx.lineTo(px + C - 10, cy);
+    ctx.lineTo(cx, py + C - 6);
     ctx.lineTo(px + 10, cy);
     ctx.closePath();
     ctx.fill();
@@ -195,15 +299,50 @@ export function drawTower(ctx, x, y, type, alpha) {
     ctx.lineTo(cx, cy + 2);
     ctx.closePath();
     ctx.fill();
-  } else {
-    // 赤橙の投石台（円形台座 + 腕）
+  } else if (type === 'poison') {
+    // 緑の壺と泡
     ctx.fillStyle = c.sub;
     ctx.beginPath();
-    ctx.arc(cx, cy, 13, 0, Math.PI * 2);
+    ctx.ellipse(cx, cy + 4, C * 0.3, C * 0.26, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = c.main;
     ctx.beginPath();
-    ctx.arc(cx, cy, 9, 0, Math.PI * 2);
+    ctx.ellipse(cx, cy - 2, C * 0.26, C * 0.14, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = c.accent;
+    ctx.beginPath();
+    ctx.arc(cx - 6, cy - 8, 3, 0, Math.PI * 2);
+    ctx.arc(cx + 5, cy - 11, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (type === 'ballista') {
+    // 木の台座と鋼の弓
+    ctx.fillStyle = c.main;
+    ctx.fillRect(px + C * 0.2, cy - 3, C * 0.6, 6);
+    ctx.strokeStyle = c.accent;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(cx, cy, C * 0.3, Math.PI * 1.15, Math.PI * 1.85);
+    ctx.stroke();
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy + C * 0.25);
+    ctx.lineTo(cx, cy - C * 0.3);
+    ctx.stroke();
+    ctx.fillStyle = c.accent;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - C * 0.38);
+    ctx.lineTo(cx - 4, cy - C * 0.26);
+    ctx.lineTo(cx + 4, cy - C * 0.26);
+    ctx.closePath();
+    ctx.fill();
+  } else if (type === 'catapult') {
+    ctx.fillStyle = c.sub;
+    ctx.beginPath();
+    ctx.arc(cx, cy, C * 0.33, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = c.main;
+    ctx.beginPath();
+    ctx.arc(cx, cy, C * 0.22, 0, Math.PI * 2);
     ctx.fill();
     ctx.strokeStyle = '#3b2a1a';
     ctx.lineWidth = 3;
@@ -215,74 +354,241 @@ export function drawTower(ctx, x, y, type, alpha) {
     ctx.beginPath();
     ctx.arc(cx + 8, cy - 8, 4, 0, Math.PI * 2);
     ctx.fill();
+  } else if (type === 'lightning') {
+    // 尖塔と稲妻マーク
+    ctx.fillStyle = '#4a4a6a';
+    ctx.beginPath();
+    ctx.moveTo(cx, py + 5);
+    ctx.lineTo(px + C - 10, py + C - 6);
+    ctx.lineTo(px + 10, py + C - 6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = c.main;
+    ctx.beginPath();
+    ctx.moveTo(cx + 3, py + C * 0.3);
+    ctx.lineTo(cx - 4, cy + 2);
+    ctx.lineTo(cx + 1, cy + 2);
+    ctx.lineTo(cx - 3, py + C * 0.8);
+    ctx.lineTo(cx + 5, cy - 3);
+    ctx.lineTo(cx, cy - 3);
+    ctx.closePath();
+    ctx.fill();
+  } else if (type === 'holy') {
+    // 光の柱と星
+    ctx.fillStyle = c.sub;
+    ctx.fillRect(px + C * 0.3, py + C * 0.45, C * 0.4, C * 0.45);
+    ctx.fillStyle = c.main;
+    ctx.beginPath();
+    for (let i = 0; i < 8; i++) {
+      const a = (i * Math.PI) / 4;
+      const r = i % 2 === 0 ? C * 0.3 : C * 0.12;
+      const sx = cx + Math.cos(a) * r;
+      const sy = py + C * 0.36 + Math.sin(a) * r;
+      if (i === 0) ctx.moveTo(sx, sy);
+      else ctx.lineTo(sx, sy);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = c.accent;
+    ctx.beginPath();
+    ctx.arc(cx, py + C * 0.36, 3, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (type === 'goldmine') {
+    // 坑道の入口と金塊
+    ctx.fillStyle = c.sub;
+    ctx.beginPath();
+    ctx.arc(cx, cy + 4, C * 0.3, Math.PI, 0);
+    ctx.lineTo(cx + C * 0.3, py + C - 6);
+    ctx.lineTo(cx - C * 0.3, py + C - 6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#1a140a';
+    ctx.beginPath();
+    ctx.arc(cx, cy + 6, C * 0.17, Math.PI, 0);
+    ctx.lineTo(cx + C * 0.17, py + C - 6);
+    ctx.lineTo(cx - C * 0.17, py + C - 6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = c.main;
+    ctx.fillRect(cx - 9, py + 7, 6, 5);
+    ctx.fillRect(cx + 3, py + 9, 6, 5);
+    ctx.fillStyle = c.accent;
+    ctx.fillRect(cx - 8, py + 8, 2, 2);
+    ctx.fillRect(cx + 4, py + 10, 2, 2);
+  }
+
+  // レベル表示（金の点）
+  if (level > 1) {
+    ctx.fillStyle = '#f2c14e';
+    for (let i = 0; i < level; i++) {
+      ctx.beginPath();
+      ctx.arc(px + C * 0.22 + i * 7, py + C - 7, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
   ctx.restore();
 }
 
 // 敵。種類ごとに形と大きさを変え、頭上にHPバー
 function drawEnemy(ctx, e) {
+  const C = layout.cell;
+  const s = C / 40; // 40px 基準の倍率
   const c = ENEMY_COLORS[e.type];
-  const px = e.x * CELL;
-  const py = e.y * CELL;
+  const px = e.x * C;
+  let py = e.y * C;
   const slowed = e.slowFactor < 1 && e.slowUntil > 0;
   ctx.save();
+
+  if (e.flying) {
+    // 影を落として浮かせる
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.beginPath();
+    ctx.ellipse(px, py + 6 * s, 9 * s, 4 * s, 0, 0, Math.PI * 2);
+    ctx.fill();
+    py -= 10 * s;
+  }
+
   ctx.lineWidth = 2;
   ctx.strokeStyle = c.edge;
   ctx.fillStyle = c.body;
 
-  if (e.type === 'goblin') {
-    ctx.beginPath();
-    ctx.arc(px, py, 9, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    // 耳
-    ctx.beginPath();
-    ctx.moveTo(px - 8, py - 4); ctx.lineTo(px - 13, py - 9); ctx.lineTo(px - 5, py - 8);
-    ctx.moveTo(px + 8, py - 4); ctx.lineTo(px + 13, py - 9); ctx.lineTo(px + 5, py - 8);
-    ctx.fill();
-  } else if (e.type === 'wolf') {
-    // 横長の三角形（進行方向は右向き前提で簡略化）
-    ctx.beginPath();
-    ctx.moveTo(px + 11, py);
-    ctx.lineTo(px - 9, py - 7);
-    ctx.lineTo(px - 9, py + 7);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-  } else {
-    ctx.beginPath();
-    ctx.arc(px, py, 13, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    // 牙
-    ctx.fillStyle = '#eee';
-    ctx.fillRect(px - 5, py + 3, 3, 5);
-    ctx.fillRect(px + 2, py + 3, 3, 5);
+  switch (e.type) {
+    case 'goblin':
+      circle(ctx, px, py, 9 * s);
+      ctx.beginPath();
+      ctx.moveTo(px - 8 * s, py - 4 * s); ctx.lineTo(px - 13 * s, py - 9 * s); ctx.lineTo(px - 5 * s, py - 8 * s);
+      ctx.moveTo(px + 8 * s, py - 4 * s); ctx.lineTo(px + 13 * s, py - 9 * s); ctx.lineTo(px + 5 * s, py - 8 * s);
+      ctx.fill();
+      break;
+    case 'wolf':
+      ctx.beginPath();
+      ctx.moveTo(px + 11 * s, py);
+      ctx.lineTo(px - 9 * s, py - 7 * s);
+      ctx.lineTo(px - 9 * s, py + 7 * s);
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      break;
+    case 'orc':
+      circle(ctx, px, py, 13 * s);
+      ctx.fillStyle = '#eee';
+      ctx.fillRect(px - 5 * s, py + 3 * s, 3 * s, 5 * s);
+      ctx.fillRect(px + 2 * s, py + 3 * s, 3 * s, 5 * s);
+      break;
+    case 'slime':
+    case 'slime_small': {
+      const r = (e.type === 'slime' ? 11 : 7) * s;
+      ctx.beginPath();
+      ctx.ellipse(px, py + r * 0.2, r, r * 0.8, 0, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle = 'rgba(255,255,255,0.6)';
+      ctx.beginPath();
+      ctx.arc(px - r * 0.35, py - r * 0.25, r * 0.22, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    }
+    case 'bat':
+      ctx.beginPath();
+      ctx.moveTo(px, py);
+      ctx.lineTo(px - 12 * s, py - 7 * s); ctx.lineTo(px - 9 * s, py + 1 * s); ctx.lineTo(px - 4 * s, py - 2 * s);
+      ctx.lineTo(px, py + 4 * s);
+      ctx.lineTo(px + 4 * s, py - 2 * s); ctx.lineTo(px + 9 * s, py + 1 * s); ctx.lineTo(px + 12 * s, py - 7 * s);
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#ff5a5a';
+      ctx.fillRect(px - 3 * s, py - 1 * s, 2, 2);
+      ctx.fillRect(px + 1 * s, py - 1 * s, 2, 2);
+      break;
+    case 'skeleton':
+      circle(ctx, px, py - 2 * s, 8 * s);
+      ctx.fillStyle = '#333';
+      ctx.fillRect(px - 5 * s, py - 4 * s, 3 * s, 3 * s);
+      ctx.fillRect(px + 2 * s, py - 4 * s, 3 * s, 3 * s);
+      ctx.fillStyle = c.body;
+      ctx.fillRect(px - 7 * s, py + 6 * s, 14 * s, 3 * s);
+      break;
+    case 'gargoyle':
+      ctx.beginPath();
+      ctx.moveTo(px, py - 11 * s);
+      ctx.lineTo(px + 9 * s, py);
+      ctx.lineTo(px, py + 9 * s);
+      ctx.lineTo(px - 9 * s, py);
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(px - 8 * s, py - 2 * s); ctx.lineTo(px - 16 * s, py - 9 * s); ctx.lineTo(px - 10 * s, py + 3 * s);
+      ctx.moveTo(px + 8 * s, py - 2 * s); ctx.lineTo(px + 16 * s, py - 9 * s); ctx.lineTo(px + 10 * s, py + 3 * s);
+      ctx.fill();
+      break;
+    case 'troll':
+      ctx.beginPath();
+      ctx.roundRect(px - 14 * s, py - 13 * s, 28 * s, 26 * s, 8 * s);
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#2b2b1a';
+      ctx.fillRect(px - 7 * s, py - 4 * s, 4 * s, 4 * s);
+      ctx.fillRect(px + 3 * s, py - 4 * s, 4 * s, 4 * s);
+      break;
+    case 'dark_knight':
+      ctx.beginPath();
+      ctx.roundRect(px - 11 * s, py - 12 * s, 22 * s, 24 * s, 4 * s);
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#ff3b3b';
+      ctx.fillRect(px - 6 * s, py - 5 * s, 4 * s, 2 * s);
+      ctx.fillRect(px + 2 * s, py - 5 * s, 4 * s, 2 * s);
+      ctx.strokeStyle = '#b0b0c0';
+      ctx.beginPath();
+      ctx.moveTo(px + 11 * s, py + 8 * s); ctx.lineTo(px + 18 * s, py - 10 * s);
+      ctx.stroke();
+      break;
+    case 'demon_lord':
+      circle(ctx, px, py, 18 * s);
+      ctx.fillStyle = '#2a0505';
+      ctx.beginPath();
+      ctx.moveTo(px - 10 * s, py - 12 * s); ctx.lineTo(px - 16 * s, py - 26 * s); ctx.lineTo(px - 3 * s, py - 16 * s);
+      ctx.moveTo(px + 10 * s, py - 12 * s); ctx.lineTo(px + 16 * s, py - 26 * s); ctx.lineTo(px + 3 * s, py - 16 * s);
+      ctx.fill();
+      ctx.fillStyle = '#ffd34d';
+      ctx.fillRect(px - 8 * s, py - 4 * s, 5 * s, 3 * s);
+      ctx.fillRect(px + 3 * s, py - 4 * s, 5 * s, 3 * s);
+      break;
+    default:
+      circle(ctx, px, py, 9 * s);
   }
 
-  // スロウ中は青い輪
-  if (slowed) {
-    ctx.strokeStyle = 'rgba(120, 220, 255, 0.9)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(px, py, 16, 0, Math.PI * 2);
-    ctx.stroke();
-  }
+  // スロウ中は青い輪、毒中は緑の輪
+  if (slowed) ring(ctx, px, py, 16 * s, 'rgba(120, 220, 255, 0.9)');
+  if (e.poisonDps > 0 && e.poisonUntil > 0) ring(ctx, px, py, 19 * s, 'rgba(150, 255, 90, 0.8)');
 
-  // HPバー
+  // HPバー（ボスは大きく）
   const ratio = Math.max(0, e.hp / e.maxHp);
-  const bw = 24;
+  const bw = (e.boss ? 60 : e.type === 'troll' || e.type === 'dark_knight' ? 34 : 24) * s;
+  const by = py - (e.boss ? 32 : 20) * s;
   ctx.fillStyle = 'rgba(0,0,0,0.6)';
-  ctx.fillRect(px - bw / 2, py - 20, bw, 4);
+  ctx.fillRect(px - bw / 2, by, bw, 4);
   ctx.fillStyle = ratio > 0.5 ? '#5ad15a' : ratio > 0.25 ? '#f2c14e' : '#e45c5c';
-  ctx.fillRect(px - bw / 2, py - 20, bw * ratio, 4);
+  ctx.fillRect(px - bw / 2, by, bw * ratio, 4);
   ctx.restore();
+}
+
+function circle(ctx, x, y, r) {
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+}
+
+function ring(ctx, x, y, r, color) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.stroke();
 }
 
 // 弾
 function drawProjectile(ctx, p) {
-  const px = p.x * CELL;
-  const py = p.y * CELL;
+  const C = layout.cell;
+  const px = p.x * C;
+  const py = p.y * C;
   ctx.save();
   if (p.towerType === 'archer') {
     ctx.strokeStyle = '#f3e3b5';
@@ -290,68 +596,172 @@ function drawProjectile(ctx, p) {
     ctx.beginPath();
     ctx.arc(px, py, 3, 0, Math.PI * 2);
     ctx.stroke();
+  } else if (p.towerType === 'ballista') {
+    ctx.strokeStyle = '#e0e6ec';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(px - 5, py);
+    ctx.lineTo(px + 5, py);
+    ctx.stroke();
   } else if (p.towerType === 'ice') {
-    ctx.fillStyle = '#9fe9ff';
-    ctx.shadowColor = '#5fd0ff';
-    ctx.shadowBlur = 8;
-    ctx.beginPath();
-    ctx.arc(px, py, 4, 0, Math.PI * 2);
-    ctx.fill();
+    glowDot(ctx, px, py, 4, '#9fe9ff', '#5fd0ff');
+  } else if (p.towerType === 'poison') {
+    glowDot(ctx, px, py, 4, '#b6ff6a', '#6fd13a');
   } else {
-    ctx.fillStyle = '#ff7a2a';
-    ctx.shadowColor = '#ffb347';
-    ctx.shadowBlur = 12;
-    ctx.beginPath();
-    ctx.arc(px, py, 6, 0, Math.PI * 2);
-    ctx.fill();
+    glowDot(ctx, px, py, 6, '#ff7a2a', '#ffb347');
   }
+  ctx.restore();
+}
+
+function glowDot(ctx, x, y, r, fill, glow) {
+  ctx.fillStyle = fill;
+  ctx.shadowColor = glow;
+  ctx.shadowBlur = 10;
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// 演出: 連鎖雷・爆発・聖光
+function drawEffect(ctx, fx) {
+  const C = layout.cell;
+  ctx.save();
+  if (fx.kind === 'chain') {
+    ctx.strokeStyle = 'rgba(255, 255, 180, 0.95)';
+    ctx.shadowColor = '#f4e04d';
+    ctx.shadowBlur = 12;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    fx.pts.forEach(([x, y], i) => {
+      const px = x * C;
+      const py = y * C;
+      if (i === 0) ctx.moveTo(px, py);
+      else {
+        // ギザギザ（決定的: 点の index で折り返し方向を決める）
+        const [lx, ly] = fx.pts[i - 1];
+        const mx = ((lx + x) / 2) * C + (i % 2 === 0 ? 6 : -6);
+        const my = ((ly + y) / 2) * C + (i % 2 === 0 ? -6 : 6);
+        ctx.lineTo(mx, my);
+        ctx.lineTo(px, py);
+      }
+    });
+    ctx.stroke();
+  } else if (fx.kind === 'blast') {
+    const t = 1 - fx.ttl / 10;
+    ctx.strokeStyle = `rgba(255, 150, 60, ${1 - t})`;
+    ctx.fillStyle = `rgba(255, 110, 40, ${0.35 * (1 - t)})`;
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(fx.x * C, fx.y * C, fx.r * C * (0.4 + 0.6 * t), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  } else if (fx.kind === 'aura') {
+    const t = 1 - fx.ttl / 6;
+    ctx.strokeStyle = `rgba(255, 240, 180, ${1 - t})`;
+    ctx.fillStyle = `rgba(255, 240, 180, ${0.2 * (1 - t)})`;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(fx.x * C, fx.y * C, fx.r * C, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// 選択中の建物: 射程円と枠
+function drawSelection(ctx, state, ui) {
+  if (!ui.selected) return;
+  const C = layout.cell;
+  const t = state.towers.find((tw) => tw.x === ui.selected.x && tw.y === ui.selected.y);
+  if (!t) return;
+  const stats = getTowerStats(t.type, t.level);
+  ctx.save();
+  if (stats.range) {
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(t.x * C + C / 2, t.y * C + C / 2, stats.range * C, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.strokeStyle = '#f2c14e';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(t.x * C + 1.5, t.y * C + 1.5, C - 3, C - 3);
   ctx.restore();
 }
 
 // マウスオーバー: 設置プレビューと射程円。配置不可なら赤
 function drawHover(ctx, state, ui) {
   if (!ui.hover) return;
+  const C = layout.cell;
   const { x, y } = ui.hover;
-  const px = x * CELL;
-  const py = y * CELL;
-  const cx = px + CELL / 2;
-  const cy = py + CELL / 2;
+  const px = x * C;
+  const py = y * C;
+  const cx = px + C / 2;
+  const cy = py + C / 2;
+  const hasTower = state.towers.some((t) => t.x === x && t.y === y);
   ctx.save();
 
   if (ui.tool === 'sell') {
-    const has = state.towers.some((t) => t.x === x && t.y === y);
-    ctx.fillStyle = has ? 'rgba(255, 80, 80, 0.35)' : 'rgba(255,255,255,0.12)';
-    ctx.fillRect(px, py, CELL, CELL);
-    if (has) {
+    ctx.fillStyle = hasTower ? 'rgba(255, 80, 80, 0.35)' : 'rgba(255,255,255,0.12)';
+    ctx.fillRect(px, py, C, C);
+    if (hasTower) {
       ctx.strokeStyle = '#ff5a5a';
       ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.moveTo(px + 8, py + 8); ctx.lineTo(px + CELL - 8, py + CELL - 8);
-      ctx.moveTo(px + CELL - 8, py + 8); ctx.lineTo(px + 8, py + CELL - 8);
+      ctx.moveTo(px + 8, py + 8); ctx.lineTo(px + C - 8, py + C - 8);
+      ctx.moveTo(px + C - 8, py + 8); ctx.lineTo(px + 8, py + C - 8);
       ctx.stroke();
     }
+  } else if (hasTower) {
+    // 既存の建物の上: 選択できることを示す
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(px + 2, py + 2, C - 4, C - 4);
   } else if (ui.tool && TOWERS[ui.tool]) {
     const ok = ui.hoverOk;
-    const def = TOWERS[ui.tool];
-    // 射程円
-    ctx.fillStyle = ok ? 'rgba(255, 255, 200, 0.12)' : 'rgba(255, 80, 80, 0.12)';
-    ctx.strokeStyle = ok ? 'rgba(255, 255, 200, 0.7)' : 'rgba(255, 80, 80, 0.8)';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.arc(cx, cy, def.range * CELL, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    // 本体プレビュー
+    const stats = getTowerStats(ui.tool, 1);
+    if (stats.range) {
+      ctx.fillStyle = ok ? 'rgba(255, 255, 200, 0.12)' : 'rgba(255, 80, 80, 0.12)';
+      ctx.strokeStyle = ok ? 'rgba(255, 255, 200, 0.7)' : 'rgba(255, 80, 80, 0.8)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(cx, cy, stats.range * C, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
     drawTower(ctx, x, y, ui.tool, 0.6);
     if (!ok) {
       ctx.fillStyle = 'rgba(255, 60, 60, 0.45)';
-      ctx.fillRect(px, py, CELL, CELL);
+      ctx.fillRect(px, py, C, C);
     }
   }
   ctx.restore();
+}
+
+// ステージ選択用のミニマップ（障害物と門・城だけ）
+export function drawMiniMap(canvas, stage) {
+  const { cols, rows, start, goal } = stage.map;
+  const cell = 6;
+  canvas.width = cols * cell;
+  canvas.height = rows * cell;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#4a8a42';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  for (const o of stage.obstacles) {
+    ctx.fillStyle = o.kind === 'water' ? '#3b78b5' : '#6c665c';
+    ctx.fillRect(o.x * cell, o.y * cell, o.w * cell, o.h * cell);
+  }
+  ctx.fillStyle = '#b86bff';
+  ctx.fillRect(start.x * cell, start.y * cell, cell, cell);
+  ctx.fillStyle = '#eee';
+  ctx.fillRect(goal.x * cell, goal.y * cell, cell, cell);
 }
 
 // 敵の表示名（UI用）
 export function enemyName(type) {
   return ENEMIES[type]?.name ?? type;
 }
+
+export { CELL_EMPTY };
