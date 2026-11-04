@@ -121,6 +121,18 @@ button:hover { background: #474380; }
 button:disabled { opacity: 0.45; cursor: not-allowed; }
 button small { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
 
+/* ジャンルタブ */
+.tabs { display: flex; gap: 3px; margin-bottom: 6px; }
+.tabs button {
+  flex: 1; padding: 5px 2px; font-size: 12px; text-align: center;
+  border-radius: 6px 6px 0 0; border-bottom-width: 0; background: #2f2c4a;
+}
+.tabs button.active { background: #4f4a2d; border-color: var(--gold); color: var(--gold); }
+.tabs button .n { display: block; font-size: 10px; color: var(--muted); }
+.genre-desc { font-size: 11px; color: var(--muted); margin: 0 2px 6px; min-height: 14px; }
+#panel h2 small { font-weight: normal; text-transform: none; letter-spacing: 0; margin-left: 6px; }
+.tower-grid button.tool.hidden { display: none; }
+
 /* タワー選択グリッド */
 .tower-grid {
   display: grid;

@@ -512,6 +512,10 @@ export function drawTower(ctx, x, y, type, alpha, level = 1) {
     ctx.fillRect(cx - 2, py + 5, 4, 6);
   }
 
+  else {
+    drawGenericTower(ctx, type, px, py, cx, cy, c || genreColor(TOWERS[type].genre));
+  }
+
   // レベル表示（金の点）
   if (level > 1) {
     ctx.fillStyle = '#f2c14e';
@@ -522,6 +526,98 @@ export function drawTower(ctx, x, y, type, alpha, level = 1) {
     }
   }
   ctx.restore();
+}
+
+// ジャンルごとの基本色（個別の色が無い建築に使う）
+const GENRE_COLORS = {
+  melee:   { main: '#c0623a', sub: '#6e3018', accent: '#ffd2b0' },
+  ranged:  { main: '#5e8f5a', sub: '#2f4f2c', accent: '#d8f5c8' },
+  support: { main: '#d9b34a', sub: '#7a5f1a', accent: '#fff2c0' },
+  debuff:  { main: '#7f5fb8', sub: '#3d2a62', accent: '#e4d2ff' },
+  special: { main: '#8d8a80', sub: '#5c5a52', accent: '#f0ede4' },
+};
+export function genreColor(genre) {
+  return GENRE_COLORS[genre] || GENRE_COLORS.special;
+}
+
+// 個別の形を持たない建築の汎用描画: ジャンルで輪郭を変え、中央に略称を書く
+function drawGenericTower(ctx, type, px, py, cx, cy, c) {
+  const C = layout.cell;
+  const def = TOWERS[type];
+  ctx.fillStyle = c.main;
+  ctx.strokeStyle = c.sub;
+  ctx.lineWidth = 2;
+  switch (def.genre) {
+    case 'melee': {
+      // 角ばった砦
+      ctx.fillRect(px + C * 0.22, py + C * 0.28, C * 0.56, C * 0.6);
+      ctx.strokeRect(px + C * 0.22, py + C * 0.28, C * 0.56, C * 0.6);
+      ctx.fillStyle = c.sub;
+      for (let i = 0; i < 3; i++) ctx.fillRect(px + C * 0.22 + i * C * 0.2, py + C * 0.2, C * 0.14, C * 0.12);
+      break;
+    }
+    case 'ranged': {
+      // 丸い台座と砲身
+      ctx.beginPath();
+      ctx.arc(cx, cy + C * 0.1, C * 0.3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = c.sub;
+      ctx.fillRect(cx - 3, py + C * 0.12, 6, C * 0.4);
+      break;
+    }
+    case 'support': {
+      // 旗と竿
+      ctx.fillStyle = c.sub;
+      ctx.fillRect(cx - 2, py + C * 0.15, 4, C * 0.72);
+      ctx.fillStyle = c.main;
+      ctx.beginPath();
+      ctx.moveTo(cx + 2, py + C * 0.18);
+      ctx.lineTo(cx + C * 0.36, py + C * 0.3);
+      ctx.lineTo(cx + 2, py + C * 0.45);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      break;
+    }
+    case 'debuff': {
+      // 逆三角の祭壇と煙
+      ctx.beginPath();
+      ctx.moveTo(px + C * 0.2, py + C * 0.3);
+      ctx.lineTo(px + C * 0.8, py + C * 0.3);
+      ctx.lineTo(cx, py + C * 0.88);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = c.accent;
+      ctx.beginPath();
+      ctx.arc(cx - 5, py + C * 0.2, 3, 0, Math.PI * 2);
+      ctx.arc(cx + 4, py + C * 0.15, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    }
+    default: {
+      // 家（屋根と壁）
+      ctx.fillRect(px + C * 0.24, cy, C * 0.52, C * 0.4);
+      ctx.strokeRect(px + C * 0.24, cy, C * 0.52, C * 0.4);
+      ctx.fillStyle = c.sub;
+      ctx.beginPath();
+      ctx.moveTo(px + C * 0.16, cy);
+      ctx.lineTo(cx, py + C * 0.18);
+      ctx.lineTo(px + C * 0.84, cy);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+  // 略称
+  ctx.fillStyle = '#ffffff';
+  ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+  ctx.lineWidth = 3;
+  ctx.font = `bold ${Math.round(C * 0.38)}px "Yu Gothic UI", "Meiryo", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.strokeText(def.short, cx, cy + C * 0.12);
+  ctx.fillText(def.short, cx, cy + C * 0.12);
 }
 
 // 敵。種類ごとに形と大きさを変え、頭上にHPバー

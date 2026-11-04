@@ -28,7 +28,11 @@
       </div>
 
       <aside id="panel">
-        <h2>建築</h2>
+        <h2>建築 <small id="towerCount"></small></h2>
+        <div id="genreTabs" class="tabs">
+          <!-- ジャンルタブは main.js が config から生成する -->
+        </div>
+        <div id="genreDesc" class="genre-desc"></div>
         <div id="towerButtons" class="tower-grid">
           <!-- タワー選択ボタンは main.js が config から生成する -->
         </div>
@@ -64,7 +68,9 @@
         <ul class="help">
           <li>左クリックで設置。石壁はドラッグで連続配置できる</li>
           <li>建物をクリックすると選択（強化/売却）。塔も壁と同じく経路を塞ぐ</li>
+          <li>Tab でジャンル切替、1〜9 で表示中ジャンルの建築を選択</li>
           <li>右クリック / Esc で選択解除、Space でウェーブ開始、U で強化</li>
+          <li>支援建築は範囲内の塔を強化する。同じ効果は重複せず最大だけ有効</li>
           <li>敵は常に最短経路を進む。壁で迷路を作って足止めしよう</li>
           <li>飛行する敵は迷路を無視して直進する（紫の破線）</li>
           <li>鎧は物理ダメージを固定値で減らす。魔法・貫通は影響なし</li>

@@ -3,8 +3,9 @@
 import { DT, TICK_RATE, ENEMIES, ECONOMY, COMBAT, getStage } from './config.js';
 import { PHASE, cellIndex } from './state.js';
 import { nextCells } from './pathfinding.js';
-import { nextInt } from './rng.js';
+import { nextInt, nextFloat } from './rng.js';
 import { getTowerStats } from './towers.js';
+import { effectiveStats, economyModifiers } from './buffs.js';
 
 // 演出オブジェクトの寿命（tick）
 const EFFECT_TTL = { chain: 8, blast: 10, aura: 6, beam: 7 };
@@ -57,6 +58,7 @@ function makeEnemy(state, type, hpMul, x, y, cx, cy, tx, ty) {
     curseUntil: 0,    // この waveTick まで呪い
     curseArmor: 0,    // 呪いによる鎧低下量
     curseMul: 1,      // 呪いによる被ダメージ倍率
+    stunUntil: 0,     // この waveTick まで気絶（動けない）
     reached: false,   // ゴール到達フラグ
   };
 }
@@ -93,6 +95,7 @@ function moveEnemies(state) {
   const goal = state.map.goal;
   for (const e of state.enemies) {
     if (e.reached || e.hp <= 0) continue;
+    if (state.waveTick < e.stunUntil) continue; // 気絶中は動けない
     let budget = currentSpeed(state, e) * DT;
     while (budget > 0 && !e.reached) {
       const gx = e.tx + 0.5;
@@ -124,6 +127,44 @@ function moveEnemies(state) {
   }
 }
 
+// 押し戻し: 現在マスの中心に戻し、ゴールから遠ざかる隣接マスへ cells 回たどる
+function knockback(state, e, cells) {
+  if (e.flying) {
+    // 飛行は門の方向へ直線的に戻す
+    const { start } = state.map;
+    const dx = start.x + 0.5 - e.x;
+    const dy = start.y + 0.5 - e.y;
+    const d = Math.hypot(dx, dy);
+    if (d === 0) return;
+    const back = Math.min(d, cells);
+    e.x += (dx / d) * back;
+    e.y += (dy / d) * back;
+    return;
+  }
+  const { cols, rows } = state.map;
+  let cx = e.cx;
+  let cy = e.cy;
+  for (let i = 0; i < cells; i++) {
+    const here = state.flow[cellIndex(state.map, cx, cy)];
+    let found = null;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = cx + dx;
+      const ny = cy + dy;
+      if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
+      if (state.flow[cellIndex(state.map, nx, ny)] === here + 1) { found = { x: nx, y: ny }; break; }
+    }
+    if (!found) break;
+    cx = found.x;
+    cy = found.y;
+  }
+  e.cx = cx;
+  e.cy = cy;
+  e.x = cx + 0.5;
+  e.y = cy + 0.5;
+  const next = pickNextCell(state, cx, cy);
+  if (next) { e.tx = next.x; e.ty = next.y; }
+}
+
 // ---- 毒・再生 ----
 function applyStatusEffects(state) {
   for (const e of state.enemies) {
@@ -149,17 +190,16 @@ function canTarget(stats, e) {
   return true;
 }
 
-// 射程内で最もゴールに近い敵
-function findTarget(state, stats, cx, cy) {
-  let target = null;
-  let best = Infinity;
+// 射程内の敵をゴールに近い順に最大 n 体
+function findTargets(state, stats, cx, cy, n) {
+  const cands = [];
   for (const e of state.enemies) {
     if (!canTarget(stats, e)) continue;
     if (Math.hypot(e.x - cx, e.y - cy) > stats.range) continue;
-    const rem = remainingDistance(state, e);
-    if (rem < best) { best = rem; target = e; }
+    cands.push({ e, rem: remainingDistance(state, e) });
   }
-  return target;
+  cands.sort((a, b) => a.rem - b.rem || a.e.id - b.e.id);
+  return cands.slice(0, n).map((c) => c.e);
 }
 
 // ---- タワー ----
@@ -167,18 +207,18 @@ function updateTowers(state) {
   for (const t of state.towers) {
     if (t.cooldown > 0) t.cooldown -= 1;
     if (t.cooldown > 0) continue;
-    const stats = getTowerStats(t.type, t.level);
+    const stats = effectiveStats(state, t);
     if (stats.attack === 'none') continue;
     const cx = t.x + 0.5;
     const cy = t.y + 0.5;
 
     if (stats.attack === 'aura') {
-      // 射程内の全敵に即時ダメージ
+      // 射程内の全敵に即時ダメージ＋状態異常
       let hitAny = false;
       for (const e of state.enemies) {
         if (!canTarget(stats, e)) continue;
         if (Math.hypot(e.x - cx, e.y - cy) > stats.range) continue;
-        applyDamage(state, e, stats.damage, stats);
+        applyHit(state, e, stats, t);
         hitAny = true;
       }
       if (hitAny) {
@@ -188,69 +228,78 @@ function updateTowers(state) {
       continue;
     }
 
-    const target = findTarget(state, stats, cx, cy);
-    if (!target) continue;
+    const targets = findTargets(state, stats, cx, cy, stats.multishot);
+    if (targets.length === 0) continue;
     t.cooldown = Math.round(stats.cooldown * TICK_RATE);
 
     if (stats.attack === 'chain') {
-      fireChain(state, t, stats, target);
+      fireChain(state, t, stats, targets[0]);
       continue;
     }
     if (stats.attack === 'line') {
-      fireLine(state, t, stats, target);
+      fireLine(state, t, stats, targets[0]);
       continue;
     }
 
-    // 範囲弾は着弾予測: 目標の進行方向 × 速度 × 飛行時間 ぶん先を狙う
-    let tx = target.x;
-    let ty = target.y;
-    if (stats.leadTarget && !target.flying) {
-      const dist = Math.hypot(target.x - cx, target.y - cy);
-      const flight = dist / stats.projectileSpeed;
-      const ddx = target.tx + 0.5 - target.x;
-      const ddy = target.ty + 0.5 - target.y;
-      const dlen = Math.hypot(ddx, ddy);
-      if (dlen > 0) {
-        // 次のマス中心を越えない範囲で先読みする（曲がり角で外れすぎないように）
-        const lead = Math.min(dlen, currentSpeed(state, target) * flight);
-        tx += (ddx / dlen) * lead;
-        ty += (ddy / dlen) * lead;
+    for (const target of targets) {
+      // 範囲弾は着弾予測: 目標の進行方向 × 速度 × 飛行時間 ぶん先を狙う
+      let tx = target.x;
+      let ty = target.y;
+      if (stats.leadTarget && !target.flying && state.waveTick >= target.stunUntil) {
+        const dist = Math.hypot(target.x - cx, target.y - cy);
+        const flight = dist / stats.projectileSpeed;
+        const ddx = target.tx + 0.5 - target.x;
+        const ddy = target.ty + 0.5 - target.y;
+        const dlen = Math.hypot(ddx, ddy);
+        if (dlen > 0) {
+          // 次のマス中心を越えない範囲で先読みする（曲がり角で外れすぎないように）
+          const lead = Math.min(dlen, currentSpeed(state, target) * flight);
+          tx += (ddx / dlen) * lead;
+          ty += (ddy / dlen) * lead;
+        }
       }
+      state.projectiles.push({
+        id: state.nextId++,
+        kind: stats.attack,          // 'homing' | 'splash'
+        towerType: t.type,
+        towerId: t.id,
+        x: cx,
+        y: cy,
+        speed: stats.projectileSpeed,
+        damage: stats.damage,
+        damageType: stats.damageType,
+        pierceArmor: stats.pierceArmor,
+        groundOnly: stats.groundOnly,
+        flyingMul: stats.flyingMul,
+        groundMul: stats.groundMul,
+        undeadMul: stats.undeadMul,
+        bossMul: stats.bossMul,
+        executeBelow: stats.executeBelow,
+        crit: stats.crit,
+        ramp: stats.ramp,
+        stun: stats.stun,
+        knockback: stats.knockback,
+        statusDurationMul: stats.statusDurationMul || 1,
+        targetId: target.id,
+        tx,
+        ty,
+        slow: stats.slow,
+        poison: stats.poison,
+        curse: stats.curse,
+        splashRadius: stats.splashRadius || 0,
+      });
     }
-
-    state.projectiles.push({
-      id: state.nextId++,
-      kind: stats.attack,          // 'homing' | 'splash'
-      towerType: t.type,
-      x: cx,
-      y: cy,
-      speed: stats.projectileSpeed,
-      damage: stats.damage,
-      damageType: stats.damageType,
-      pierceArmor: stats.pierceArmor,
-      groundOnly: stats.groundOnly,
-      flyingMul: stats.flyingMul,
-      groundMul: stats.groundMul,
-      undeadMul: stats.undeadMul,
-      targetId: target.id,
-      tx,
-      ty,
-      slow: stats.slow,
-      poison: stats.poison,
-      curse: stats.curse,
-      splashRadius: stats.splashRadius || 0,
-    });
   }
 }
 
-// 連鎖雷: 最初の敵に当て、近くの未命中の敵へ順に跳ねる（威力は減衰）
+// 連鎖: 最初の敵に当て、近くの未命中の敵へ順に跳ねる（威力は減衰）
 function fireChain(state, tower, stats, first) {
   const hit = new Set();
   const pts = [[tower.x + 0.5, tower.y + 0.5]];
   let cur = first;
   let dmg = stats.damage;
   for (let j = 0; j <= stats.chain.jumps && cur; j++) {
-    applyDamage(state, cur, Math.round(dmg), stats);
+    applyHit(state, cur, { ...stats, damage: Math.round(dmg) }, tower);
     hit.add(cur.id);
     pts.push([cur.x, cur.y]);
     dmg *= stats.chain.decay;
@@ -284,7 +333,7 @@ function fireLine(state, tower, stats, target) {
     if (along < 0 || along > stats.range) continue;
     const side = Math.abs(ex * dy - ey * dx);        // 射線からの垂直距離
     if (side > stats.lineWidth) continue;
-    applyDamage(state, e, stats.damage, stats);
+    applyHit(state, e, stats, tower);
   }
   state.effects.push({
     kind: 'beam', x1: ox, y1: oy, x2: ox + dx * stats.range, y2: oy + dy * stats.range,
@@ -304,7 +353,18 @@ function updateProjectiles(state) {
       const dy = target.y - p.y;
       const dist = Math.hypot(dx, dy);
       if (dist <= moved) {
-        applyHit(state, target, p);
+        const tower = p.towerId ? state.towers.find((t) => t.id === p.towerId) : null;
+        applyHit(state, target, p, tower);
+        // 追尾弾に範囲があれば周囲へも（本体より弱い半分のダメージ）
+        if (p.splashRadius > 0) {
+          for (const e of state.enemies) {
+            if (e === target || e.hp <= 0 || e.reached) continue;
+            if (p.groundOnly && e.flying) continue;
+            if (Math.hypot(e.x - target.x, e.y - target.y) <= p.splashRadius) {
+              applyDamage(state, e, p.damage / 2, p);
+            }
+          }
+        }
         continue;
       }
       p.x += (dx / dist) * moved;
@@ -321,7 +381,7 @@ function updateProjectiles(state) {
         for (const e of state.enemies) {
           if (e.hp <= 0 || e.reached) continue;
           if (p.groundOnly && e.flying) continue;
-          if (Math.hypot(e.x - p.x, e.y - p.y) <= p.splashRadius) applyHit(state, e, p);
+          if (Math.hypot(e.x - p.x, e.y - p.y) <= p.splashRadius) applyHit(state, e, p, null);
         }
         state.effects.push({ kind: 'blast', x: p.x, y: p.y, r: p.splashRadius, ttl: EFFECT_TTL.blast, towerType: p.towerType });
         continue;
@@ -345,26 +405,55 @@ function applyDamage(state, enemy, amount, src) {
   if (enemy.undead && src.undeadMul && src.undeadMul !== 1) dmg *= src.undeadMul;
   if (enemy.flying && src.flyingMul && src.flyingMul !== 1) dmg *= src.flyingMul;
   if (!enemy.flying && src.groundMul && src.groundMul !== 1) dmg *= src.groundMul;
+  if (enemy.boss && src.bossMul && src.bossMul !== 1) dmg *= src.bossMul;
   if (cursed) dmg *= enemy.curseMul;
   enemy.hp -= dmg;
+  return dmg;
 }
 
-// 弾の命中処理: ダメージ・スロウ・毒・呪い
-function applyHit(state, enemy, p) {
-  applyDamage(state, enemy, p.damage, p);
-  if (p.slow) {
+// 命中処理: ダメージ（クリティカル・威力上昇・即死）と状態異常（スロウ・毒・呪い・気絶・押し戻し）
+// src は弾またはタワーの実効ステータス。tower は威力上昇の記録用（無ければ null）
+function applyHit(state, enemy, src, tower) {
+  let amount = src.damage || 0;
+  // 威力上昇: 同じ敵を撃ち続けると段数が増える
+  if (src.ramp && tower) {
+    if (tower.rampTarget === enemy.id) tower.rampStacks += 1;
+    else { tower.rampTarget = enemy.id; tower.rampStacks = 0; }
+    amount *= Math.min(src.ramp.max, 1 + src.ramp.perHit * tower.rampStacks);
+  }
+  // クリティカル（シード乱数）
+  if (src.crit && src.crit.chance > 0 && nextFloat(state.rng) < src.crit.chance) {
+    amount *= src.crit.mul;
+  }
+  if (amount > 0) applyDamage(state, enemy, amount, src);
+  // 即死: 一定割合以下の HP のボス以外を倒す
+  if (src.executeBelow > 0 && !enemy.boss && enemy.hp > 0 && enemy.hp <= enemy.maxHp * src.executeBelow) {
+    enemy.hp = 0;
+  }
+  const durMul = src.statusDurationMul || 1;
+  if (src.slow) {
     // スロウ耐性: 減速量を (1 − 耐性) 倍にする
-    enemy.slowFactor = 1 - (1 - p.slow.factor) * (1 - enemy.slowResist);
-    enemy.slowUntil = state.waveTick + Math.round(p.slow.duration * TICK_RATE);
+    enemy.slowFactor = 1 - (1 - src.slow.factor) * (1 - enemy.slowResist);
+    enemy.slowUntil = state.waveTick + Math.round(src.slow.duration * durMul * TICK_RATE);
   }
-  if (p.poison) {
-    enemy.poisonDps = p.poison.dps;
-    enemy.poisonUntil = state.waveTick + Math.round(p.poison.duration * TICK_RATE);
+  if (src.poison) {
+    // 毒は強い方を優先する
+    if (state.waveTick >= enemy.poisonUntil || src.poison.dps >= enemy.poisonDps) {
+      enemy.poisonDps = src.poison.dps;
+      enemy.poisonUntil = state.waveTick + Math.round(src.poison.duration * durMul * TICK_RATE);
+    }
   }
-  if (p.curse) {
-    enemy.curseArmor = p.curse.armorReduce;
-    enemy.curseMul = p.curse.damageTakenMul;
-    enemy.curseUntil = state.waveTick + Math.round(p.curse.duration * TICK_RATE);
+  if (src.curse) {
+    enemy.curseArmor = Math.max(src.curse.armorReduce, state.waveTick < enemy.curseUntil ? enemy.curseArmor : 0);
+    enemy.curseMul = Math.max(src.curse.damageTakenMul, state.waveTick < enemy.curseUntil ? enemy.curseMul : 1);
+    enemy.curseUntil = state.waveTick + Math.round(src.curse.duration * durMul * TICK_RATE);
+  }
+  if (src.stun && !enemy.boss && nextFloat(state.rng) < src.stun.chance) {
+    const until = state.waveTick + Math.round(src.stun.duration * durMul * TICK_RATE);
+    if (until > enemy.stunUntil) enemy.stunUntil = until;
+  }
+  if (src.knockback && !enemy.boss && enemy.hp > 0 && nextFloat(state.rng) < src.knockback.chance) {
+    knockback(state, enemy, src.knockback.cells);
   }
 }
 
@@ -379,13 +468,25 @@ function updateEffects(state) {
   state.effects = alive;
 }
 
+// 賞金首の掲示板: 倒れた位置の近くにある掲示板のうち最大の賞金
+function bountyFor(state, x, y) {
+  let best = 0;
+  for (const t of state.towers) {
+    const st = getTowerStats(t.type, t.level);
+    if (!st.bounty) continue;
+    if (Math.hypot(t.x + 0.5 - x, t.y + 0.5 - y) <= st.bounty.range) best = Math.max(best, st.bounty.gold);
+  }
+  return best;
+}
+
 // ---- 撃破・到達の後始末 ----
 function cleanupEnemies(state) {
   const alive = [];
   for (const e of state.enemies) {
     if (e.hp <= 0) {
-      state.money += e.reward;
-      state.stats.earned += e.reward;
+      const gold = e.reward + bountyFor(state, e.x, e.y);
+      state.money += gold;
+      state.stats.earned += gold;
       state.stats.kills += 1;
       // 分裂: 同じ場所に子を生む（経路情報を引き継ぐ）
       const split = ENEMIES[e.type].splitInto;
@@ -417,15 +518,31 @@ function checkWaveEnd(state) {
   if (state.spawnQueue.length > 0 || state.enemies.length > 0) return;
   state.projectiles = [];
   state.effects = [];
-  // クリアボーナス + 金鉱の収入
-  let income = ECONOMY.waveClearBonusBase + ECONOMY.waveClearBonusPerWave * state.wave;
+  const stage = getStage(state.stageId);
+  const mod = economyModifiers(state);
+
+  // クリアボーナス（宝物庫で倍率）
+  let income = Math.round((ECONOMY.waveClearBonusBase + ECONOMY.waveClearBonusPerWave * state.wave) * mod.bonusMul);
+  // 建物ごとの収入・成長収入、利息・錬金・泉は「最大の1件」だけ有効
+  let bestInterest = null;
+  let bestPerTower = null;
+  let lives = 0;
   for (const t of state.towers) {
-    income += getTowerStats(t.type, t.level).income;
+    const st = getTowerStats(t.type, t.level);
+    income += st.income + st.incomeGrowth * Math.max(0, state.wave - t.builtWave - 1);
+    if (st.interest && (!bestInterest || st.interest.rate > bestInterest.rate)) bestInterest = st.interest;
+    if (st.perTowerGold && (!bestPerTower || st.perTowerGold.gold > bestPerTower.gold)) bestPerTower = st.perTowerGold;
+    lives += st.livesPerWave;
     t.cooldown = 0;
+    t.rampTarget = 0;
+    t.rampStacks = 0;
   }
+  if (bestInterest) income += Math.min(bestInterest.cap, Math.floor(state.money * bestInterest.rate));
+  if (bestPerTower) income += Math.min(bestPerTower.cap, bestPerTower.gold * state.towers.length);
   state.money += income;
   state.stats.earned += income;
+  if (lives > 0) state.lives = Math.min(stage.initialLives, state.lives + lives);
+
   state.waveTick = 0;
-  const total = getStage(state.stageId).waves.length;
-  state.phase = state.wave >= total ? PHASE.CLEAR : PHASE.PREPARE;
+  state.phase = state.wave >= stage.waves.length ? PHASE.CLEAR : PHASE.PREPARE;
 }

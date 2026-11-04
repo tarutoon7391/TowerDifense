@@ -1,11 +1,12 @@
 // エントリーポイント: ゲームループ（requestAnimationFrame + 固定タイムステップ）と UI 配線
 // ロジックは shared/ に閉じているので、ここでは state を読み、コマンドと step() だけを呼ぶ
-import { DT, TOWERS, STAGES, ENEMIES, getStage } from '/shared/config.js';
+import { DT, TOWERS, STAGES, ENEMIES, GENRES, getStage, towersByGenre } from '/shared/config.js';
 import { createState, PHASE } from '/shared/state.js';
-import { startWave, upgradeTower, sellTower } from '/shared/commands.js';
+import { startWave, upgradeTower, sellTower, currentUpgradeCost } from '/shared/commands.js';
 import { step } from '/shared/simulation.js';
-import { getTowerStats, upgradeCost } from '/shared/towers.js';
-import { render, layout, TOWER_COLORS, drawMiniMap } from './renderer.js';
+import { getTowerStats } from '/shared/towers.js';
+import { effectiveStats, economyModifiers } from '/shared/buffs.js';
+import { render, layout, TOWER_COLORS, drawMiniMap, genreColor } from './renderer.js';
 import { bindInput, refreshHover } from './input.js';
 
 const canvas = document.getElementById('game');
@@ -65,19 +66,48 @@ let checkpoint = null;
 
 // ---- タワー選択ボタンを config から生成 ----
 const towerButtons = {};
-Object.entries(TOWERS).forEach(([type, def], index) => {
-  const btn = document.createElement('button');
-  btn.className = 'tool';
-  btn.title = def.desc;
-  const key = index < 9 ? `<span class="key">${index + 1}</span>` : '';
-  btn.innerHTML = key +
-    `<span class="swatch" style="background:${TOWER_COLORS[type].main}">${def.short}</span>` +
-    `<span class="label">${def.name}</span>` +
-    `<span class="cost">${def.cost}</span>`;
-  btn.addEventListener('click', () => selectTool(type));
-  el.towerButtons.appendChild(btn);
-  towerButtons[type] = btn;
-});
+const genreButtons = {};
+let currentGenre = GENRES[GENRES.length - 1].id; // 最初は「特殊」（石壁がある）
+$('towerCount').textContent = `全${Object.keys(TOWERS).length}種`;
+
+// ジャンルタブ
+for (const g of GENRES) {
+  const b = document.createElement('button');
+  b.innerHTML = `${g.name}<span class="n">${towersByGenre(g.id).length}種</span>`;
+  b.title = g.desc;
+  b.addEventListener('click', () => selectGenre(g.id));
+  el.genreTabs = el.genreTabs || $('genreTabs');
+  el.genreTabs.appendChild(b);
+  genreButtons[g.id] = b;
+}
+
+// 建築ボタン（全ジャンル分を作り、タブで表示を切り替える）
+for (const g of GENRES) {
+  towersByGenre(g.id).forEach((type, index) => {
+    const def = TOWERS[type];
+    const btn = document.createElement('button');
+    btn.className = 'tool';
+    btn.dataset.genre = g.id;
+    btn.title = def.desc;
+    const color = (TOWER_COLORS[type] || genreColor(g.id)).main;
+    const key = index < 9 ? `<span class="key">${index + 1}</span>` : '';
+    btn.innerHTML = key +
+      `<span class="swatch" style="background:${color}">${def.short}</span>` +
+      `<span class="label">${def.name}</span>` +
+      `<span class="cost">${def.cost}</span>`;
+    btn.addEventListener('click', () => selectTool(type));
+    el.towerButtons.appendChild(btn);
+    towerButtons[type] = btn;
+  });
+}
+
+function selectGenre(id) {
+  currentGenre = id;
+  for (const [gid, b] of Object.entries(genreButtons)) b.classList.toggle('active', gid === id);
+  for (const [type, btn] of Object.entries(towerButtons)) btn.classList.toggle('hidden', TOWERS[type].genre !== id);
+  $('genreDesc').textContent = GENRES.find((g) => g.id === id)?.desc || '';
+}
+selectGenre(currentGenre);
 el.sellBtn.addEventListener('click', () => selectTool(ui.tool === 'sell' ? null : 'sell'));
 
 function selectTool(tool) {
@@ -199,11 +229,17 @@ el.nextStageBtn.addEventListener('click', () => {
   else showStageSelect();
 });
 
-// キーボードショートカット（1〜9: タワー, S: 売却, Space: ウェーブ開始, U: 強化）
+// キーボードショートカット（1〜9: 表示中ジャンルの建築, Tab: ジャンル切替, S: 売却, Space: ウェーブ開始, U: 強化）
 window.addEventListener('keydown', (ev) => {
   if (!game.running || ev.target.tagName === 'INPUT') return;
-  const types = Object.keys(TOWERS);
+  const types = towersByGenre(currentGenre);
   if (ev.key >= '1' && ev.key <= '9' && Number(ev.key) <= types.length) selectTool(types[Number(ev.key) - 1]);
+  else if (ev.key === 'Tab') {
+    ev.preventDefault();
+    const i = GENRES.findIndex((g) => g.id === currentGenre);
+    const n = (i + (ev.shiftKey ? GENRES.length - 1 : 1)) % GENRES.length;
+    selectGenre(GENRES[n].id);
+  }
   else if (ev.key === 's' || ev.key === 'S') selectTool('sell');
   else if (ev.key === 'u' || ev.key === 'U') el.upgradeBtn.click();
   else if (ev.key === ' ') { ev.preventDefault(); el.startWaveBtn.click(); }
@@ -248,11 +284,14 @@ function updateHud() {
   el.sellBtn.disabled = !prepare;
 
   // 次のウェーブの構成
-  const nextKey = `${s.stageId}:${s.wave}:${s.phase}`;
+  const preview = economyModifiers(s).previewWaves;
+  const nextKey = `${s.stageId}:${s.wave}:${s.phase}:${preview}`;
   if (nextKey !== lastNextWaveKey) {
     lastNextWaveKey = nextKey;
-    const def = stage.waves[s.wave];
-    if (prepare && def) {
+    const html = [];
+    for (let k = 0; k <= preview; k++) {
+      const def = stage.waves[s.wave + k];
+      if (!prepare || !def) break;
       const counts = {};
       for (const g of def.groups) counts[g.type] = (counts[g.type] || 0) + g.count;
       const parts = Object.entries(counts).map(([t, n]) => {
@@ -276,10 +315,10 @@ function updateHud() {
         ].filter(Boolean).join(' / ');
         return `<span class="enemy${e.boss ? ' boss' : ''}" title="${tip}">${label}</span>`;
       });
-      el.nextWave.innerHTML = `次のウェーブ: <b>${parts.join('、')}</b>　HP倍率 ×${def.hpMul}`;
-    } else {
-      el.nextWave.textContent = '';
+      const label = k === 0 ? '次のウェーブ' : `ウェーブ${s.wave + k + 1}`;
+      html.push(`${label}: <b>${parts.join('、')}</b>　HP倍率 ×${def.hpMul}`);
     }
+    el.nextWave.innerHTML = html.join('<br>');
   }
 
   // 選択中の建物パネル
@@ -289,22 +328,64 @@ function updateHud() {
     el.towerInfo.classList.add('hidden');
     lastInfoKey = '';
   } else {
-    const key = `${t.id}:${t.level}:${s.money}:${s.phase}`;
+    const key = `${t.id}:${t.level}:${s.money}:${s.phase}:${s.towers.length}`;
     if (key !== lastInfoKey) {
       lastInfoKey = key;
-      const st = getTowerStats(t.type, t.level);
-      const cost = upgradeCost(t.type, t.level);
+      const st = effectiveStats(s, t);   // 支援効果込みの実効値
+      const base = getTowerStats(t.type, t.level);
+      const cost = currentUpgradeCost(s, t);
+      const mod = economyModifiers(s);
       el.tiName.textContent = st.name;
       el.tiLevel.textContent = `Lv${t.level}`;
       const lines = [];
-      if (st.damage) lines.push(`攻撃 ${st.damage}（${st.damageType === 'magic' ? '魔法' : '物理'}）/ 射程 ${st.range.toFixed(1)} / 間隔 ${st.cooldown.toFixed(2)}秒`);
+      if (st.damage !== undefined && st.attack !== 'none') {
+        lines.push(`攻撃 ${st.damage}（${st.damageType === 'magic' ? '魔法' : '物理'}）/ 射程 ${st.range.toFixed(1)} / 間隔 ${st.cooldown.toFixed(2)}秒`);
+      }
+      if (st.applied && st.applied.sources > 0) {
+        const b = st.applied;
+        const parts = [];
+        if (b.damageMul > 1) parts.push(`攻撃×${b.damageMul.toFixed(2)}`);
+        if (b.rangeAdd > 0) parts.push(`射程+${b.rangeAdd.toFixed(1)}`);
+        if (b.cooldownMul < 1) parts.push(`間隔×${b.cooldownMul.toFixed(2)}`);
+        if (b.critAdd > 0) parts.push(`クリ+${Math.round(b.critAdd * 100)}%`);
+        if (b.flyingMul > 1) parts.push(`対空×${b.flyingMul.toFixed(2)}`);
+        if (b.statusDurationMul > 1) parts.push(`状態異常×${b.statusDurationMul.toFixed(1)}`);
+        lines.push(`支援効果: ${parts.join(' ')}`);
+      }
       if (st.slow) lines.push(`減速 ×${st.slow.factor.toFixed(1)}（${st.slow.duration}秒）`);
-      if (st.poison) lines.push(`毒 ${st.poison.dps}/秒（${st.poison.duration}秒）`);
+      if (st.poison) lines.push(`継続ダメージ ${st.poison.dps}/秒（${st.poison.duration}秒）`);
       if (st.chain) lines.push(`連鎖 ${st.chain.jumps}回`);
       if (st.curse) lines.push(`呪い 鎧-${st.curse.armorReduce} / 被ダメ×${st.curse.damageTakenMul}（${st.curse.duration}秒）`);
-      if (st.income) lines.push(`収入 ${st.income} / ウェーブ`);
+      if (st.stun) lines.push(`気絶 ${Math.round(st.stun.chance * 100)}%（${st.stun.duration}秒）`);
+      if (st.knockback) lines.push(`押し戻し ${Math.round(st.knockback.chance * 100)}%（${st.knockback.cells}マス）`);
+      if (st.crit) lines.push(`クリティカル ${Math.round(st.crit.chance * 100)}%（×${st.crit.mul}）`);
+      if (st.executeBelow) lines.push(`HP${Math.round(st.executeBelow * 100)}%以下を即死`);
+      if (st.ramp) lines.push(`同一目標で威力+${Math.round(st.ramp.perHit * 100)}%/発（最大×${st.ramp.max}）`);
+      if (st.multishot > 1) lines.push(`同時に${st.multishot}体を攻撃`);
+      if (st.splashRadius && st.attack === 'homing') lines.push(`着弾時に周囲${st.splashRadius}マスへ半減ダメージ`);
+      if (st.buff) {
+        const b = st.buff;
+        const parts = [];
+        if (b.damageMul > 1) parts.push(`攻撃×${b.damageMul.toFixed(2)}`);
+        if (b.rangeAdd > 0) parts.push(`射程+${b.rangeAdd.toFixed(1)}`);
+        if (b.cooldownMul < 1) parts.push(`間隔×${b.cooldownMul.toFixed(2)}`);
+        if (b.critAdd > 0) parts.push(`クリ+${Math.round(b.critAdd * 100)}%`);
+        if (b.flyingMul > 1) parts.push(`対空×${b.flyingMul.toFixed(2)}`);
+        if (b.statusDurationMul > 1) parts.push(`状態異常×${b.statusDurationMul.toFixed(1)}`);
+        lines.push(`支援（範囲${b.range}${b.only ? '・' + (b.only === 'magic' ? '魔法塔のみ' : '物理塔のみ') : ''}）: ${parts.join(' ')}`);
+      }
+      if (st.income) lines.push(`収入 ${st.income} / ウェーブ${st.incomeGrowth ? `（毎ウェーブ+${st.incomeGrowth}）` : ''}`);
+      if (st.interest) lines.push(`利息 所持金の${Math.round(st.interest.rate * 100)}%（上限${st.interest.cap}）`);
+      if (st.livesPerWave) lines.push(`ウェーブ終了ごとにライフ+${st.livesPerWave}`);
+      if (st.bonusMul > 1) lines.push(`クリアボーナス×${st.bonusMul}`);
+      if (st.sellRate) lines.push(`売却返金率 ${Math.round(st.sellRate * 100)}%`);
+      if (st.upgradeDiscount < 1) lines.push(`強化費用 ${Math.round(st.upgradeDiscount * 100)}%`);
+      if (st.bounty) lines.push(`周囲${st.bounty.range}マスでの撃破+${st.bounty.gold}ゴールド`);
+      if (st.perTowerGold) lines.push(`建物1つにつき+${st.perTowerGold.gold}（上限${st.perTowerGold.cap}）`);
+      if (st.previewWaves) lines.push(`先の${st.previewWaves}ウェーブを表示`);
       if (t.type === 'wall') lines.push('攻撃しない');
-      lines.push(`投資額 ${t.invested} → 売却 ${Math.floor(t.invested * 0.5)}`);
+      lines.push(`投資額 ${t.invested} → 売却 ${Math.floor(t.invested * mod.sellRate)}`);
+      void base;
       // 強化後の数値プレビュー
       if (cost !== null && t.type !== 'wall') {
         const nx = getTowerStats(t.type, t.level + 1);
