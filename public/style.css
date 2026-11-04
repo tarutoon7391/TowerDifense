@@ -144,6 +144,13 @@ button small { display: block; font-size: 11px; color: var(--muted); margin-top:
   text-shadow: 0 1px 2px rgba(0,0,0,0.7);
 }
 .tower-grid .label { font-size: 11px; line-height: 1.2; }
+.tower-grid button.tool { position: relative; }
+.tower-grid .key {
+  position: absolute; top: 2px; left: 4px;
+  font-size: 10px; color: var(--muted);
+}
+.next-wave .enemy { border-bottom: 1px dotted var(--muted); cursor: help; }
+.ti-stats .next { color: #c8f0c0; }
 .tower-grid .cost { color: var(--gold); font-weight: bold; font-size: 12px; }
 button.tool.active { border-color: var(--gold); background: #4f4a2d; }
 .tool-desc { min-height: 30px; font-size: 12px; color: var(--muted); margin: 6px 2px 0; line-height: 1.4; }

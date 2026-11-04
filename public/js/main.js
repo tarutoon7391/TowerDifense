@@ -57,22 +57,27 @@ const el = {
   stageSelect: $('stageSelect'), stageCards: $('stageCards'),
   overlay: $('overlay'), overlayTitle: $('overlayTitle'), overlayBody: $('overlayBody'),
   restartBtn: $('restartBtn'), nextStageBtn: $('nextStageBtn'), toSelectBtn: $('toSelectBtn'),
+  retryWaveBtn: $('retryWaveBtn'),
 };
+
+// ウェーブ開始直前の状態スナップショット（JSON）。ゲームオーバー時に「このウェーブから」やり直せる
+let checkpoint = null;
 
 // ---- タワー選択ボタンを config から生成 ----
 const towerButtons = {};
-for (const [type, def] of Object.entries(TOWERS)) {
+Object.entries(TOWERS).forEach(([type, def], index) => {
   const btn = document.createElement('button');
   btn.className = 'tool';
   btn.title = def.desc;
-  btn.innerHTML =
+  const key = index < 9 ? `<span class="key">${index + 1}</span>` : '';
+  btn.innerHTML = key +
     `<span class="swatch" style="background:${TOWER_COLORS[type].main}">${def.short}</span>` +
     `<span class="label">${def.name}</span>` +
     `<span class="cost">${def.cost}</span>`;
   btn.addEventListener('click', () => selectTool(type));
   el.towerButtons.appendChild(btn);
   towerButtons[type] = btn;
-}
+});
 el.sellBtn.addEventListener('click', () => selectTool(ui.tool === 'sell' ? null : 'sell'));
 
 function selectTool(tool) {
@@ -130,6 +135,7 @@ function startStage(stageId) {
   ui.selected = null;
   ui.hover = null;
   shownEnd = false;
+  checkpoint = null;
   el.stageName.textContent = `${stage.name}`;
   el.waveTotal.textContent = stage.waves.length;
   el.stageSelect.classList.add('hidden');
@@ -141,8 +147,32 @@ function startStage(stageId) {
 
 // ---- ボタン類 ----
 el.startWaveBtn.addEventListener('click', () => {
+  // 開始前の状態を保存しておき、負けたらここからやり直せるようにする
+  const snapshot = JSON.stringify(game.state);
   const r = startWave(game.state);
+  if (r.ok) checkpoint = snapshot;
   showMessage(r.ok ? { ok: true, text: `ウェーブ ${r.wave} 開始！` } : r);
+});
+el.retryWaveBtn.addEventListener('click', () => {
+  if (!checkpoint) return;
+  game.state = JSON.parse(checkpoint);
+  ui.selected = null;
+  shownEnd = false;
+  el.overlay.classList.add('hidden');
+  showMessage({ ok: true, text: `ウェーブ ${game.state.wave + 1} の準備からやり直し` });
+});
+// ウェーブ中の「ステージ選択へ戻る」は2回押しで確定（誤操作防止）
+let backArmedUntil = 0;
+el.backBtn.addEventListener('click', () => {
+  const inWave = game.state.phase === PHASE.WAVE;
+  if (inWave && performance.now() > backArmedUntil) {
+    backArmedUntil = performance.now() + 3000;
+    el.backBtn.textContent = '本当に戻る？（もう一度押す）';
+    setTimeout(() => { el.backBtn.textContent = 'ステージ選択へ戻る'; }, 3000);
+    return;
+  }
+  el.backBtn.textContent = 'ステージ選択へ戻る';
+  showStageSelect();
 });
 el.speedSeg.querySelectorAll('button').forEach((b) => {
   b.addEventListener('click', () => {
@@ -161,7 +191,6 @@ el.sellSelectedBtn.addEventListener('click', () => {
   if (r.ok) { r.text = `売却しました（+${r.refund}）`; ui.selected = null; }
   showMessage(r);
 });
-el.backBtn.addEventListener('click', showStageSelect);
 el.toSelectBtn.addEventListener('click', showStageSelect);
 el.restartBtn.addEventListener('click', () => startStage(game.state.stageId));
 el.nextStageBtn.addEventListener('click', () => {
@@ -234,7 +263,18 @@ function updateHud() {
         if (e.regen) tags.push('再生');
         if (e.undead) tags.push('不死');
         const label = `${e.name}×${n}${tags.length ? `(${tags.join('・')})` : ''}`;
-        return e.boss ? `<span class="boss">${label}</span>` : label;
+        // ツールチップに数値を出す（HP はこのウェーブの倍率込み）
+        const tip = [
+          `HP ${Math.round(e.hp * def.hpMul)}`, `速度 ${e.speed}`,
+          e.armor ? `鎧 ${e.armor}（物理-${e.armor}）` : null,
+          e.regen ? `再生 ${e.regen}/秒` : null,
+          e.flying ? '飛行: 迷路を無視して直進' : null,
+          e.undead ? 'アンデッド: 聖光に弱い' : null,
+          e.splitInto ? `倒すと${ENEMIES[e.splitInto.type].name}×${e.splitInto.count}に分裂` : null,
+          e.slowResist ? `スロウ耐性 ${Math.round(e.slowResist * 100)}%` : null,
+          `到達でライフ-${e.livesCost ?? 1}`, `報酬 ${e.reward}〜`,
+        ].filter(Boolean).join(' / ');
+        return `<span class="enemy${e.boss ? ' boss' : ''}" title="${tip}">${label}</span>`;
       });
       el.nextWave.innerHTML = `次のウェーブ: <b>${parts.join('、')}</b>　HP倍率 ×${def.hpMul}`;
     } else {
@@ -261,9 +301,22 @@ function updateHud() {
       if (st.slow) lines.push(`減速 ×${st.slow.factor.toFixed(1)}（${st.slow.duration}秒）`);
       if (st.poison) lines.push(`毒 ${st.poison.dps}/秒（${st.poison.duration}秒）`);
       if (st.chain) lines.push(`連鎖 ${st.chain.jumps}回`);
+      if (st.curse) lines.push(`呪い 鎧-${st.curse.armorReduce} / 被ダメ×${st.curse.damageTakenMul}（${st.curse.duration}秒）`);
       if (st.income) lines.push(`収入 ${st.income} / ウェーブ`);
       if (t.type === 'wall') lines.push('攻撃しない');
       lines.push(`投資額 ${t.invested} → 売却 ${Math.floor(t.invested * 0.5)}`);
+      // 強化後の数値プレビュー
+      if (cost !== null && t.type !== 'wall') {
+        const nx = getTowerStats(t.type, t.level + 1);
+        const diff = [];
+        if (nx.damage) diff.push(`攻撃 ${st.damage}→${nx.damage}`);
+        if (nx.range) diff.push(`射程 ${st.range.toFixed(1)}→${nx.range.toFixed(1)}`);
+        if (nx.cooldown) diff.push(`間隔 ${st.cooldown.toFixed(2)}→${nx.cooldown.toFixed(2)}`);
+        if (nx.poison) diff.push(`毒 ${st.poison.dps}→${nx.poison.dps}`);
+        if (nx.slow) diff.push(`減速 ×${st.slow.factor.toFixed(1)}→×${nx.slow.factor.toFixed(1)}`);
+        if (nx.income) diff.push(`収入 ${st.income}→${nx.income}`);
+        lines.push(`Lv${t.level + 1}: ${diff.join(' / ')}`);
+      }
       el.tiStats.textContent = lines.join('\n');
       if (t.type === 'wall' || cost === null) {
         el.upgradeBtn.textContent = t.type === 'wall' ? '強化不可' : '最大Lv';
@@ -294,6 +347,8 @@ function updateHud() {
       `到達ウェーブ: ${s.wave} / ${stage.waves.length}\n撃破数: ${s.stats.kills}　侵入数: ${s.stats.leaked}\n` +
       `残りライフ: ${s.lives} / ${stage.initialLives}　獲得金額: ${s.stats.earned}`;
     el.nextStageBtn.classList.toggle('hidden', !(cleared && idx + 1 < STAGES.length));
+    el.retryWaveBtn.classList.toggle('hidden', cleared || !checkpoint);
+    if (!cleared && checkpoint) el.retryWaveBtn.textContent = `ウェーブ ${s.wave} からやり直す`;
     el.overlay.classList.remove('hidden');
   }
 }

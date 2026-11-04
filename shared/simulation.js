@@ -7,7 +7,7 @@ import { nextInt } from './rng.js';
 import { getTowerStats } from './towers.js';
 
 // 演出オブジェクトの寿命（tick）
-const EFFECT_TTL = { chain: 8, blast: 10, aura: 6 };
+const EFFECT_TTL = { chain: 8, blast: 10, aura: 6, beam: 7 };
 
 // 1tick 進める。状態オブジェクトを直接更新し、同じ参照を返す
 export function step(state) {
@@ -30,6 +30,8 @@ export function step(state) {
 function makeEnemy(state, type, hpMul, x, y, cx, cy, tx, ty) {
   const def = ENEMIES[type];
   const hp = Math.round(def.hp * hpMul);
+  // 撃破報酬は HP 倍率に応じて伸びる（終盤の資金効率を保つ）
+  const reward = Math.round(def.reward * (1 + ECONOMY.rewardHpScale * (hpMul - 1)));
   return {
     id: state.nextId++,
     type,
@@ -38,10 +40,11 @@ function makeEnemy(state, type, hpMul, x, y, cx, cy, tx, ty) {
     maxHp: hp,
     hpMul,
     speed: def.speed,
-    reward: def.reward,
+    reward,
     livesCost: def.livesCost ?? 1,
     armor: def.armor || 0,
     regen: def.regen || 0,
+    slowResist: def.slowResist || 0,
     flying: !!def.flying,
     undead: !!def.undead,
     boss: !!def.boss,
@@ -51,6 +54,9 @@ function makeEnemy(state, type, hpMul, x, y, cx, cy, tx, ty) {
     slowFactor: 1,
     poisonUntil: 0,   // この waveTick まで毒
     poisonDps: 0,
+    curseUntil: 0,    // この waveTick まで呪い
+    curseArmor: 0,    // 呪いによる鎧低下量
+    curseMul: 1,      // 呪いによる被ダメージ倍率
     reached: false,   // ゴール到達フラグ
   };
 }
@@ -77,13 +83,17 @@ function pickNextCell(state, x, y) {
   return cands[nextInt(state.rng, 0, cands.length - 1)];
 }
 
+// 現在の実効速度（スロウ込み）
+function currentSpeed(state, e) {
+  return e.speed * (state.waveTick < e.slowUntil ? e.slowFactor : 1);
+}
+
 // ---- 移動 ----
 function moveEnemies(state) {
   const goal = state.map.goal;
   for (const e of state.enemies) {
     if (e.reached || e.hp <= 0) continue;
-    const factor = state.waveTick < e.slowUntil ? e.slowFactor : 1;
-    let budget = e.speed * factor * DT;
+    let budget = currentSpeed(state, e) * DT;
     while (budget > 0 && !e.reached) {
       const gx = e.tx + 0.5;
       const gy = e.ty + 0.5;
@@ -139,6 +149,19 @@ function canTarget(stats, e) {
   return true;
 }
 
+// 射程内で最もゴールに近い敵
+function findTarget(state, stats, cx, cy) {
+  let target = null;
+  let best = Infinity;
+  for (const e of state.enemies) {
+    if (!canTarget(stats, e)) continue;
+    if (Math.hypot(e.x - cx, e.y - cy) > stats.range) continue;
+    const rem = remainingDistance(state, e);
+    if (rem < best) { best = rem; target = e; }
+  }
+  return target;
+}
+
 // ---- タワー ----
 function updateTowers(state) {
   for (const t of state.towers) {
@@ -155,7 +178,7 @@ function updateTowers(state) {
       for (const e of state.enemies) {
         if (!canTarget(stats, e)) continue;
         if (Math.hypot(e.x - cx, e.y - cy) > stats.range) continue;
-        applyDamage(e, stats.damage, stats);
+        applyDamage(state, e, stats.damage, stats);
         hitAny = true;
       }
       if (hitAny) {
@@ -165,21 +188,34 @@ function updateTowers(state) {
       continue;
     }
 
-    // 射程内で最もゴールに近い敵を狙う
-    let target = null;
-    let best = Infinity;
-    for (const e of state.enemies) {
-      if (!canTarget(stats, e)) continue;
-      if (Math.hypot(e.x - cx, e.y - cy) > stats.range) continue;
-      const rem = remainingDistance(state, e);
-      if (rem < best) { best = rem; target = e; }
-    }
+    const target = findTarget(state, stats, cx, cy);
     if (!target) continue;
     t.cooldown = Math.round(stats.cooldown * TICK_RATE);
 
     if (stats.attack === 'chain') {
       fireChain(state, t, stats, target);
       continue;
+    }
+    if (stats.attack === 'line') {
+      fireLine(state, t, stats, target);
+      continue;
+    }
+
+    // 範囲弾は着弾予測: 目標の進行方向 × 速度 × 飛行時間 ぶん先を狙う
+    let tx = target.x;
+    let ty = target.y;
+    if (stats.leadTarget && !target.flying) {
+      const dist = Math.hypot(target.x - cx, target.y - cy);
+      const flight = dist / stats.projectileSpeed;
+      const ddx = target.tx + 0.5 - target.x;
+      const ddy = target.ty + 0.5 - target.y;
+      const dlen = Math.hypot(ddx, ddy);
+      if (dlen > 0) {
+        // 次のマス中心を越えない範囲で先読みする（曲がり角で外れすぎないように）
+        const lead = Math.min(dlen, currentSpeed(state, target) * flight);
+        tx += (ddx / dlen) * lead;
+        ty += (ddy / dlen) * lead;
+      }
     }
 
     state.projectiles.push({
@@ -193,11 +229,15 @@ function updateTowers(state) {
       damageType: stats.damageType,
       pierceArmor: stats.pierceArmor,
       groundOnly: stats.groundOnly,
+      flyingMul: stats.flyingMul,
+      groundMul: stats.groundMul,
+      undeadMul: stats.undeadMul,
       targetId: target.id,
-      tx: target.x,                // 範囲攻撃は発射時点の位置を狙う
-      ty: target.y,
+      tx,
+      ty,
       slow: stats.slow,
       poison: stats.poison,
+      curse: stats.curse,
       splashRadius: stats.splashRadius || 0,
     });
   }
@@ -210,7 +250,7 @@ function fireChain(state, tower, stats, first) {
   let cur = first;
   let dmg = stats.damage;
   for (let j = 0; j <= stats.chain.jumps && cur; j++) {
-    applyDamage(cur, Math.round(dmg), stats);
+    applyDamage(state, cur, Math.round(dmg), stats);
     hit.add(cur.id);
     pts.push([cur.x, cur.y]);
     dmg *= stats.chain.decay;
@@ -225,6 +265,31 @@ function fireChain(state, tower, stats, first) {
     cur = next;
   }
   state.effects.push({ kind: 'chain', pts, ttl: EFFECT_TTL.chain, towerType: tower.type });
+}
+
+// 直線貫通: 目標の方向へ射程いっぱいの射線を引き、射線の近くにいる敵を全員撃つ
+function fireLine(state, tower, stats, target) {
+  const ox = tower.x + 0.5;
+  const oy = tower.y + 0.5;
+  let dx = target.x - ox;
+  let dy = target.y - oy;
+  const len = Math.hypot(dx, dy) || 1;
+  dx /= len;
+  dy /= len;
+  for (const e of state.enemies) {
+    if (!canTarget(stats, e)) continue;
+    const ex = e.x - ox;
+    const ey = e.y - oy;
+    const along = ex * dx + ey * dy;                 // 射線方向の距離
+    if (along < 0 || along > stats.range) continue;
+    const side = Math.abs(ex * dy - ey * dx);        // 射線からの垂直距離
+    if (side > stats.lineWidth) continue;
+    applyDamage(state, e, stats.damage, stats);
+  }
+  state.effects.push({
+    kind: 'beam', x1: ox, y1: oy, x2: ox + dx * stats.range, y2: oy + dy * stats.range,
+    ttl: EFFECT_TTL.beam, towerType: tower.type,
+  });
 }
 
 // ---- 弾 ----
@@ -269,26 +334,37 @@ function updateProjectiles(state) {
   state.projectiles = alive;
 }
 
-// ダメージ計算: 物理は鎧で軽減（貫通なら無視）、聖光はアンデッドに倍率
-function applyDamage(enemy, amount, src) {
+// ダメージ計算: 物理は鎧で軽減（貫通なら無視・呪いで鎧低下）、種族倍率、呪いの被ダメ倍率
+function applyDamage(state, enemy, amount, src) {
   let dmg = amount;
+  const cursed = state.waveTick < enemy.curseUntil;
   if (src.damageType === 'physical' && !src.pierceArmor && enemy.armor > 0) {
-    dmg = Math.max(COMBAT.minDamage, dmg - enemy.armor);
+    const armor = Math.max(0, enemy.armor - (cursed ? enemy.curseArmor : 0));
+    dmg = Math.max(COMBAT.minDamage, dmg - armor);
   }
   if (enemy.undead && src.undeadMul && src.undeadMul !== 1) dmg *= src.undeadMul;
+  if (enemy.flying && src.flyingMul && src.flyingMul !== 1) dmg *= src.flyingMul;
+  if (!enemy.flying && src.groundMul && src.groundMul !== 1) dmg *= src.groundMul;
+  if (cursed) dmg *= enemy.curseMul;
   enemy.hp -= dmg;
 }
 
-// 弾の命中処理: ダメージ・スロウ・毒
+// 弾の命中処理: ダメージ・スロウ・毒・呪い
 function applyHit(state, enemy, p) {
-  applyDamage(enemy, p.damage, p);
+  applyDamage(state, enemy, p.damage, p);
   if (p.slow) {
-    enemy.slowFactor = p.slow.factor;
+    // スロウ耐性: 減速量を (1 − 耐性) 倍にする
+    enemy.slowFactor = 1 - (1 - p.slow.factor) * (1 - enemy.slowResist);
     enemy.slowUntil = state.waveTick + Math.round(p.slow.duration * TICK_RATE);
   }
   if (p.poison) {
     enemy.poisonDps = p.poison.dps;
     enemy.poisonUntil = state.waveTick + Math.round(p.poison.duration * TICK_RATE);
+  }
+  if (p.curse) {
+    enemy.curseArmor = p.curse.armorReduce;
+    enemy.curseMul = p.curse.damageTakenMul;
+    enemy.curseUntil = state.waveTick + Math.round(p.curse.duration * TICK_RATE);
   }
 }
 

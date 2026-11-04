@@ -5,6 +5,7 @@ import { TOWERS, UPGRADE } from './config.js';
 export function getTowerStats(type, level = 1) {
   const def = TOWERS[type];
   const i = Math.max(0, Math.min(UPGRADE.maxLevel, level) - 1);
+  const dmgMul = UPGRADE.damageMul[i];
   const stats = {
     type,
     level,
@@ -13,15 +14,23 @@ export function getTowerStats(type, level = 1) {
     damageType: def.damageType,
     cost: def.cost,
     range: def.range !== undefined ? def.range + UPGRADE.rangeAdd[i] : undefined,
-    damage: def.damage !== undefined ? Math.round(def.damage * UPGRADE.damageMul[i]) : undefined,
+    damage: def.damage !== undefined ? Math.round(def.damage * dmgMul) : undefined,
     cooldown: def.cooldown !== undefined ? def.cooldown * UPGRADE.cooldownMul[i] : undefined,
     projectileSpeed: def.projectileSpeed,
     splashRadius: def.splashRadius,
     groundOnly: !!def.groundOnly,
     pierceArmor: !!def.pierceArmor,
+    leadTarget: !!def.leadTarget,
     undeadMul: def.undeadMul || 1,
+    flyingMul: def.flyingMul || 1,
+    groundMul: def.groundMul || 1,
+    lineWidth: def.lineWidth || 0,
     chain: def.chain || null,
-    poison: def.poison || null,
+    // 毒の継続ダメージもレベルで伸びる
+    poison: def.poison
+      ? { dps: Math.round(def.poison.dps * dmgMul), duration: def.poison.duration }
+      : null,
+    curse: def.curse || null,
     slow: def.slow
       ? { factor: Math.max(0.1, def.slow.factor + UPGRADE.slowFactorAdd[i]), duration: def.slow.duration }
       : null,

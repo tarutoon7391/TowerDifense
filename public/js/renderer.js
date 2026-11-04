@@ -1,6 +1,6 @@
 // Canvas 2D 描画。外部画像は使わず、すべて図形で描く
 // 状態（state）は読むだけで、書き換えは一切しない
-import { TOWERS, ENEMIES, CELL_ROCK, CELL_WATER, CELL_EMPTY } from '/shared/config.js';
+import { TOWERS, ENEMIES, CELL_ROCK, CELL_WATER, CELL_EMPTY, getStage } from '/shared/config.js';
 import { PHASE } from '/shared/state.js';
 import { computePath } from '/shared/pathfinding.js';
 import { getTowerStats } from '/shared/towers.js';
@@ -19,6 +19,9 @@ export const TOWER_COLORS = {
   lightning: { main: '#f4e04d', sub: '#9a8a1a', accent: '#ffffff' },
   holy:      { main: '#f7e7b0', sub: '#c9a84a', accent: '#ffffff' },
   goldmine:  { main: '#caa03a', sub: '#6a5420', accent: '#ffe48a' },
+  wind:      { main: '#9fd9c8', sub: '#3f8a76', accent: '#ffffff' },
+  curse:     { main: '#7a3f9a', sub: '#3a1850', accent: '#d98cff' },
+  cannon:    { main: '#4a5fb5', sub: '#232d60', accent: '#9fb4ff' },
 };
 
 // 敵の表示色
@@ -51,14 +54,23 @@ export function render(ctx, state, ui) {
   drawGround(ctx, state.map);
   drawGrid(ctx, state.map);
   drawObstacles(ctx, state);
-  if (state.phase === PHASE.PREPARE) drawPath(ctx, state);
+  if (state.phase === PHASE.PREPARE) {
+    // 現在の最短経路。設置プレビュー中は「置いた後の経路」を上書き表示する
+    if (ui.hoverFlow) {
+      drawPath(ctx, state, state.flow, 'rgba(255, 240, 180, 0.18)');
+      drawPath(ctx, state, ui.hoverFlow, 'rgba(255, 255, 255, 0.7)');
+    } else {
+      drawPath(ctx, state, state.flow, 'rgba(255, 240, 180, 0.45)');
+    }
+    drawFlyingRoute(ctx, state);
+  }
   drawStartGoal(ctx, state.map);
   for (const t of state.towers) drawTower(ctx, t.x, t.y, t.type, 1, t.level);
   for (const fx of state.effects) drawEffect(ctx, fx);
   // 地上の敵 → 弾 → 飛行の敵 の順で重ねる
-  for (const e of state.enemies) if (!e.flying) drawEnemy(ctx, e);
+  for (const e of state.enemies) if (!e.flying) drawEnemy(ctx, e, state.waveTick);
   for (const p of state.projectiles) drawProjectile(ctx, p);
-  for (const e of state.enemies) if (e.flying) drawEnemy(ctx, e);
+  for (const e of state.enemies) if (e.flying) drawEnemy(ctx, e, state.waveTick);
   drawSelection(ctx, state, ui);
   drawHover(ctx, state, ui);
 }
@@ -178,13 +190,13 @@ function drawWater(ctx, x, y, grid, cols, rows) {
   }
 }
 
-// 準備フェーズ中: 現在の最短経路を薄く表示
-function drawPath(ctx, state) {
+// 準備フェーズ中: 距離マップ flow に沿った最短経路を表示
+function drawPath(ctx, state, flow, color) {
   const C = layout.cell;
-  const path = computePath(state.flow, state.map);
+  const path = computePath(flow, state.map);
   if (path.length < 2) return;
   ctx.save();
-  ctx.strokeStyle = 'rgba(255, 240, 180, 0.45)';
+  ctx.strokeStyle = color;
   ctx.lineWidth = 6;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
@@ -197,6 +209,34 @@ function drawPath(ctx, state) {
     else ctx.lineTo(px, py);
   });
   ctx.stroke();
+  ctx.restore();
+}
+
+// 次のウェーブに飛行する敵がいるとき、門→城の直線ルートを破線で示す
+function drawFlyingRoute(ctx, state) {
+  const def = getStage(state.stageId).waves[state.wave];
+  if (!def || !def.groups.some((g) => ENEMIES[g.type]?.flying)) return;
+  const C = layout.cell;
+  const { start, goal } = state.map;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(200, 180, 255, 0.55)';
+  ctx.lineWidth = 3;
+  ctx.setLineDash([4, 10]);
+  ctx.beginPath();
+  ctx.moveTo(start.x * C + C / 2, start.y * C + C / 2);
+  ctx.lineTo(goal.x * C + C / 2, goal.y * C + C / 2);
+  ctx.stroke();
+  // 小さな翼マークをルート中央に
+  const mx = ((start.x + goal.x) / 2 + 0.5) * C;
+  const my = ((start.y + goal.y) / 2 + 0.5) * C;
+  ctx.setLineDash([]);
+  ctx.fillStyle = 'rgba(200, 180, 255, 0.7)';
+  ctx.beginPath();
+  ctx.moveTo(mx, my);
+  ctx.lineTo(mx - 10, my - 6); ctx.lineTo(mx - 7, my + 1); ctx.lineTo(mx, my + 4);
+  ctx.lineTo(mx + 7, my + 1); ctx.lineTo(mx + 10, my - 6);
+  ctx.closePath();
+  ctx.fill();
   ctx.restore();
 }
 
@@ -417,6 +457,61 @@ export function drawTower(ctx, x, y, type, alpha, level = 1) {
     ctx.fillRect(cx + 4, py + 10, 2, 2);
   }
 
+  else if (type === 'wind') {
+    // 風車のような三枚羽の弩
+    ctx.strokeStyle = c.sub;
+    ctx.lineWidth = 3;
+    for (let i = 0; i < 3; i++) {
+      const a = (i * Math.PI * 2) / 3 - Math.PI / 2;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + Math.cos(a) * C * 0.32, cy + Math.sin(a) * C * 0.32);
+      ctx.stroke();
+      ctx.fillStyle = c.main;
+      ctx.beginPath();
+      ctx.ellipse(cx + Math.cos(a) * C * 0.22, cy + Math.sin(a) * C * 0.22, C * 0.12, C * 0.06, a, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = c.accent;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (type === 'curse') {
+    // 紫の塔と目玉
+    ctx.fillStyle = c.sub;
+    ctx.fillRect(px + C * 0.28, py + C * 0.25, C * 0.44, C * 0.65);
+    ctx.fillStyle = c.main;
+    ctx.beginPath();
+    ctx.moveTo(cx, py + 4);
+    ctx.lineTo(px + C * 0.78, py + C * 0.3);
+    ctx.lineTo(px + C * 0.22, py + C * 0.3);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = c.accent;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy + 3, C * 0.14, C * 0.09, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#1a0a24';
+    ctx.beginPath();
+    ctx.arc(cx, cy + 3, C * 0.05, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (type === 'cannon') {
+    // 青い砲身と魔法陣
+    ctx.strokeStyle = c.accent;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(cx, cy, C * 0.3, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = c.sub;
+    ctx.beginPath();
+    ctx.arc(cx, cy, C * 0.18, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = c.main;
+    ctx.fillRect(cx - 4, py + 5, 8, C * 0.45);
+    ctx.fillStyle = c.accent;
+    ctx.fillRect(cx - 2, py + 5, 4, 6);
+  }
+
   // レベル表示（金の点）
   if (level > 1) {
     ctx.fillStyle = '#f2c14e';
@@ -430,13 +525,16 @@ export function drawTower(ctx, x, y, type, alpha, level = 1) {
 }
 
 // 敵。種類ごとに形と大きさを変え、頭上にHPバー
-function drawEnemy(ctx, e) {
+function drawEnemy(ctx, e, state_waveTick) {
   const C = layout.cell;
   const s = C / 40; // 40px 基準の倍率
   const c = ENEMY_COLORS[e.type];
   const px = e.x * C;
   let py = e.y * C;
-  const slowed = e.slowFactor < 1 && e.slowUntil > 0;
+  // 状態異常は「現在の waveTick が期限より前」のときだけ表示する
+  const slowed = state_waveTick < e.slowUntil;
+  const poisoned = state_waveTick < e.poisonUntil;
+  const cursed = state_waveTick < e.curseUntil;
   ctx.save();
 
   if (e.flying) {
@@ -554,9 +652,10 @@ function drawEnemy(ctx, e) {
       circle(ctx, px, py, 9 * s);
   }
 
-  // スロウ中は青い輪、毒中は緑の輪
+  // スロウ中は青い輪、毒中は緑の輪、呪い中は紫の輪
   if (slowed) ring(ctx, px, py, 16 * s, 'rgba(120, 220, 255, 0.9)');
-  if (e.poisonDps > 0 && e.poisonUntil > 0) ring(ctx, px, py, 19 * s, 'rgba(150, 255, 90, 0.8)');
+  if (poisoned) ring(ctx, px, py, 19 * s, 'rgba(150, 255, 90, 0.8)');
+  if (cursed) ring(ctx, px, py, 22 * s, 'rgba(217, 140, 255, 0.8)');
 
   // HPバー（ボスは大きく）
   const ratio = Math.max(0, e.hp / e.maxHp);
@@ -607,6 +706,14 @@ function drawProjectile(ctx, p) {
     glowDot(ctx, px, py, 4, '#9fe9ff', '#5fd0ff');
   } else if (p.towerType === 'poison') {
     glowDot(ctx, px, py, 4, '#b6ff6a', '#6fd13a');
+  } else if (p.towerType === 'curse') {
+    glowDot(ctx, px, py, 4, '#d98cff', '#7a3f9a');
+  } else if (p.towerType === 'wind') {
+    ctx.strokeStyle = '#dffaf2';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(px, py, 5, 0, Math.PI * 1.4);
+    ctx.stroke();
   } else {
     glowDot(ctx, px, py, 6, '#ff7a2a', '#ffb347');
   }
@@ -645,6 +752,20 @@ function drawEffect(ctx, fx) {
         ctx.lineTo(px, py);
       }
     });
+    ctx.stroke();
+  } else if (fx.kind === 'beam') {
+    const t = 1 - fx.ttl / 7;
+    ctx.strokeStyle = `rgba(159, 180, 255, ${1 - t})`;
+    ctx.shadowColor = '#4a5fb5';
+    ctx.shadowBlur = 14;
+    ctx.lineWidth = 8 * (1 - t) + 2;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(fx.x1 * C, fx.y1 * C);
+    ctx.lineTo(fx.x2 * C, fx.y2 * C);
+    ctx.stroke();
+    ctx.strokeStyle = `rgba(255, 255, 255, ${1 - t})`;
+    ctx.lineWidth = 2;
     ctx.stroke();
   } else if (fx.kind === 'blast') {
     const t = 1 - fx.ttl / 10;

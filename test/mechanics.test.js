@@ -162,6 +162,105 @@ test('ボスが到達するとライフを大きく失う', () => {
   assert.equal(state.lives, 25 - ENEMIES.demon_lord.livesCost);
 });
 
+test('撃破報酬は HP 倍率に応じて増える', () => {
+  const state = createState({ seed: 1 });
+  soloWave(state, 'goblin', 3.0);
+  // ウェーブが終わってボーナスが混ざらないよう、2体目を遠い未来に予約しておく
+  state.spawnQueue.push({ type: 'goblin', spawnTick: 100000, hpMul: 3.0 });
+  step(state);
+  const e = state.enemies[0];
+  assert.equal(e.reward, Math.round(ENEMIES.goblin.reward * (1 + ECONOMY.rewardHpScale * 2.0)));
+  e.hp = 0;
+  const money = state.money;
+  step(state);
+  assert.equal(state.money - money, e.reward);
+});
+
+test('毒の継続ダメージは強化で伸び、ボスはスロウ耐性で減速が弱まる', () => {
+  assert.ok(getTowerStats('poison', 3).poison.dps > getTowerStats('poison', 1).poison.dps);
+  const state = createState({ seed: 1, stageId: 'castle' });
+  state.money = 100000;
+  assert.equal(placeTower(state, 2, 7, 'ice').ok, true);
+  soloWave(state, 'demon_lord');
+  step(state);
+  const boss = state.enemies[0];
+  boss.x = 2.5; boss.y = 8.5; boss.speed = 0;
+  for (let i = 0; i < TICK_RATE * 2 && boss.slowUntil === 0; i++) step(state);
+  assert.ok(boss.slowUntil > 0, 'スロウが付与されていない');
+  const base = getTowerStats('ice', 1).slow.factor;
+  const expected = 1 - (1 - base) * (1 - ENEMIES.demon_lord.slowResist);
+  assert.ok(Math.abs(boss.slowFactor - expected) < 1e-9);
+  assert.ok(boss.slowFactor > base);
+});
+
+test('風の弩は飛行に2倍・地上に半減、呪いは鎧を下げて被ダメージを増やす', () => {
+  function damageTo(type, towerType) {
+    const state = createState({ seed: 1 });
+    state.money = 100000;
+    assert.equal(placeTower(state, 2, 4, towerType).ok, true);
+    soloWave(state, type);
+    step(state);
+    const e = state.enemies[0];
+    e.x = 2.5; e.y = 5.5; e.speed = 0;
+    const before = e.hp;
+    for (let i = 0; i < TICK_RATE * 2 && e.hp === before; i++) step(state);
+    return { lost: before - e.hp, e, state };
+  }
+  const d = TOWERS.wind.damage;
+  assert.equal(damageTo('bat', 'wind').lost, d * TOWERS.wind.flyingMul);
+  assert.equal(damageTo('goblin', 'wind').lost, d * TOWERS.wind.groundMul);
+
+  // 呪い: 骸骨兵（鎧6）に呪いが付くと、アーチャーの 12 ダメージがそのまま×1.2 で通る
+  const { e, state } = damageTo('skeleton', 'curse');
+  assert.ok(e.curseUntil > state.waveTick);
+  const hpBefore = e.hp;
+  // 同じ状態でアーチャーの弾を直接当てる代わりに applyHit 相当を確認するため、アーチャーを追加して次の命中を待つ
+  assert.equal(placeTower({ ...state, phase: PHASE.PREPARE }, 3, 4, 'archer').ok, true);
+  state.money = 100000;
+  for (let i = 0; i < TICK_RATE * 2 && e.hp === hpBefore; i++) step(state);
+  const lost = hpBefore - e.hp;
+  // 呪いの弾（4×1.2）かアーチャーの弾（12×1.2）のどちらかが先に当たる
+  assert.ok(Math.abs(lost - 4.8) < 1e-9 || Math.abs(lost - 14.4) < 1e-9, `lost=${lost}`);
+});
+
+test('魔導砲は射線上の敵をまとめて貫く', () => {
+  const state = createState({ seed: 1 });
+  state.money = 100000;
+  assert.equal(placeTower(state, 2, 4, 'cannon').ok, true);
+  state.phase = PHASE.WAVE;
+  state.wave = 1;
+  state.spawnQueue = [1, 2, 3].map(() => ({ type: 'goblin', spawnTick: 1, hpMul: 1 }));
+  step(state);
+  // 塔の右方向に一直線に並べる（1体だけ射線から外す）
+  // 出現直後の1発はすでに当たっている可能性があるので、配置後の HP を基準にする
+  state.enemies[0].x = 3.5; state.enemies[0].y = 4.5;
+  state.enemies[1].x = 5.5; state.enemies[1].y = 4.5;
+  state.enemies[2].x = 4.5; state.enemies[2].y = 6.5;
+  state.enemies.forEach((e) => { e.speed = 0; e.hp = 1000; e.maxHp = 1000; }); // 死なないようにする
+  const base = state.enemies.map((e) => e.hp);
+  const cannon = state.towers[0];
+  cannon.cooldown = 0; // すぐ撃てる状態にする
+  step(state);
+  const hit = state.enemies.map((e, i) => e.hp < base[i]);
+  assert.deepEqual(hit, [true, true, false]);
+  assert.ok(state.effects.some((fx) => fx.kind === 'beam'));
+});
+
+test('投石台は移動中の敵の先を狙う（着弾予測）', () => {
+  const state = createState({ seed: 1 });
+  state.money = 100000;
+  assert.equal(placeTower(state, 3, 3, 'catapult').ok, true);
+  soloWave(state, 'wolf');
+  // 弾が出るまで進める
+  for (let i = 0; i < TICK_RATE * 3 && state.projectiles.length === 0; i++) step(state);
+  assert.equal(state.projectiles.length, 1);
+  const p = state.projectiles[0];
+  const target = state.enemies.find((e) => e.id === p.targetId);
+  assert.ok(target);
+  // 右へ進むウルフなので、狙点は現在位置より右側
+  assert.ok(p.tx > target.x, `tx=${p.tx} x=${target.x}`);
+});
+
 test('雷は複数の敵に連鎖し、演出オブジェクトが残る', () => {
   const state = createState({ seed: 1 });
   state.money = 100000;

@@ -62,10 +62,12 @@
 
         <h2>操作</h2>
         <ul class="help">
-          <li>左クリックで設置。建物をクリックすると選択（強化/売却）</li>
-          <li>右クリック / Esc で選択解除、Space でウェーブ開始</li>
+          <li>左クリックで設置。石壁はドラッグで連続配置できる</li>
+          <li>建物をクリックすると選択（強化/売却）。塔も壁と同じく経路を塞ぐ</li>
+          <li>右クリック / Esc で選択解除、Space でウェーブ開始、U で強化</li>
           <li>敵は常に最短経路を進む。壁で迷路を作って足止めしよう</li>
-          <li>飛行する敵は迷路を無視して直進する</li>
+          <li>飛行する敵は迷路を無視して直進する（紫の破線）</li>
+          <li>鎧は物理ダメージを固定値で減らす。魔法・貫通は影響なし</li>
         </ul>
       </aside>
     </main>
@@ -85,7 +87,8 @@
         <h2 id="overlayTitle"></h2>
         <p id="overlayBody"></p>
         <div class="overlay-actions">
-          <button id="restartBtn" class="primary">もう一度</button>
+          <button id="retryWaveBtn" class="primary hidden">このウェーブからやり直す</button>
+          <button id="restartBtn" class="primary">最初から</button>
           <button id="nextStageBtn" class="primary hidden">次のステージへ</button>
           <button id="toSelectBtn" class="ghost">ステージ選択へ</button>
         </div>

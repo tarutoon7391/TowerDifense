@@ -10,6 +10,7 @@ export const ECONOMY = {
   sellRefundRate: 0.5,              // 売却時の返金率（投資額に対する割合）
   waveClearBonusBase: 30,           // ウェーブクリアボーナス = base + perWave * ウェーブ番号
   waveClearBonusPerWave: 10,
+  rewardHpScale: 0.5,               // 撃破報酬 = reward × (1 + rewardHpScale × (hpMul − 1))
 };
 
 // ---- アップグレード ----
@@ -32,12 +33,14 @@ export const CELL_WATER = 3;        // 水: 通れない・建てられない
 
 // ---- タワー ----
 // 共通: cost, range(マス), damage, cooldown(秒), damageType('physical'|'magic')
-// attack: 'homing'(追尾弾・単体) | 'splash'(範囲弾) | 'chain'(連鎖雷・即時) | 'aura'(範囲内全体・即時) | 'none'
+// attack: 'homing'(追尾弾・単体) | 'splash'(範囲弾) | 'chain'(連鎖雷・即時) | 'aura'(範囲内全体・即時)
+//         | 'line'(射線上を貫通・即時) | 'none'
+// 敵の特性 slowResist は減速を軽減する（0.5 なら減速効果が半分）
 export const TOWERS = {
   wall: {
     name: '石壁', short: '壁',
     desc: '攻撃しない安価な壁。迷路づくりの主役',
-    cost: 8, attack: 'none',
+    cost: 6, attack: 'none',
   },
   archer: {
     name: 'アーチャー塔', short: '弓',
@@ -68,8 +71,28 @@ export const TOWERS = {
   catapult: {
     name: '爆炎の投石台', short: '炎',
     desc: '着弾地点に範囲ダメージ。飛行には当たらない。物理',
-    cost: 140, range: 3.6, damage: 45, cooldown: 2.4, projectileSpeed: 5,
+    cost: 140, range: 3.6, damage: 45, cooldown: 2.4, projectileSpeed: 9,
     attack: 'splash', damageType: 'physical', splashRadius: 1.1, groundOnly: true,
+    leadTarget: true,               // 目標の移動先を予測して撃つ
+  },
+  wind: {
+    name: '風の弩', short: '風',
+    desc: '対空専門。飛行に2倍、地上には半減。物理',
+    cost: 110, range: 3.5, damage: 30, cooldown: 1.0, projectileSpeed: 14,
+    attack: 'homing', damageType: 'physical', flyingMul: 2, groundMul: 0.5,
+  },
+  curse: {
+    name: '呪いの塔', short: '呪',
+    desc: '命中した敵の鎧を下げ、被ダメージを増やす。魔法',
+    cost: 120, range: 2.6, damage: 4, cooldown: 1.0, projectileSpeed: 9,
+    attack: 'homing', damageType: 'magic',
+    curse: { armorReduce: 6, damageTakenMul: 1.2, duration: 3.0 },
+  },
+  cannon: {
+    name: '魔導砲', short: '砲',
+    desc: '射線上の敵をまとめて貫く。長い直線通路で真価。魔法',
+    cost: 150, range: 4.0, damage: 35, cooldown: 1.5,
+    attack: 'line', damageType: 'magic', lineWidth: 0.55,
   },
   lightning: {
     name: '雷の尖塔', short: '雷',
@@ -87,7 +110,7 @@ export const TOWERS = {
   goldmine: {
     name: '金鉱', short: '金',
     desc: 'ウェーブ終了ごとにお金を産む。攻撃しない',
-    cost: 100, attack: 'none', income: 12,
+    cost: 60, attack: 'none', income: 10,
   },
 };
 
@@ -108,7 +131,7 @@ export const ENEMIES = {
   troll:       { name: 'トロル',       hp: 320,  speed: 0.9, reward: 20, livesCost: 2, regen: 8 },
   dark_knight: { name: '暗黒騎士',     hp: 520,  speed: 1.3, reward: 30, livesCost: 2, armor: 10, undead: true },
   demon_lord:  { name: '魔王',         hp: 3000, speed: 0.75, reward: 200, livesCost: 10,
-                 armor: 8, regen: 6, boss: true },
+                 armor: 8, regen: 6, boss: true, slowResist: 0.5 },
 };
 
 // 物理ダメージは鎧で軽減されるが、最低でもこの値は通る
@@ -177,7 +200,7 @@ export const STAGES = [
       w(2.0, g('bat', 20, 0.3), g('orc', 8, 1.4, 3)),
       w(2.3, g('skeleton', 16, 0.7), g('gargoyle', 8, 1.2, 6)),
       w(2.7, g('orc', 14, 1.0), g('slime', 12, 0.8, 2), g('bat', 12, 0.4, 8)),
-      w(3.2, g('troll', 4, 4.0), g('skeleton', 20, 0.6, 2), g('gargoyle', 10, 1.0, 10)),
+      w(3.2, g('troll', 6, 3.5), g('skeleton', 20, 0.6, 2), g('gargoyle', 10, 1.0, 10)),
     ],
   },
   {
@@ -208,7 +231,7 @@ export const STAGES = [
       w(2.5, g('dark_knight', 5, 3.0), g('wolf', 20, 0.4, 2)),
       w(2.8, g('gargoyle', 16, 0.7), g('troll', 6, 2.5, 5)),
       w(3.2, g('skeleton', 24, 0.5), g('dark_knight', 6, 2.5, 8)),
-      w(3.4, g('troll', 10, 2.0), g('dark_knight', 8, 2.0, 6), g('bat', 20, 0.3, 15)),
+      w(3.4, g('troll', 8, 2.2), g('dark_knight', 6, 2.4, 6), g('bat', 20, 0.3, 15)),
     ],
   },
   {
@@ -244,7 +267,7 @@ export const STAGES = [
       w(2.9, g('dark_knight', 8, 2.5), g('orc', 20, 0.8, 3)),
       w(3.2, g('skeleton', 30, 0.45), g('troll', 10, 2.0, 6), g('bat', 20, 0.3, 14)),
       w(3.6, g('dark_knight', 12, 2.0), g('gargoyle', 20, 0.6, 6)),
-      w(3.6, g('demon_lord', 2, 12, 0), g('dark_knight', 10, 2.0, 4), g('troll', 10, 2.0, 10), g('slime', 20, 0.6, 20)),
+      w(3.6, g('demon_lord', 1, 1, 0), g('dark_knight', 8, 2.2, 4), g('troll', 10, 2.0, 10), g('slime', 20, 0.6, 20)),
     ],
   },
 ];
