@@ -1,0 +1,175 @@
+/* 迷宮の守護者 - 画面スタイル */
+:root {
+  --bg: #1b1a2a;
+  --panel: #2a2740;
+  --text: #f1ecd8;
+  --muted: #a69f8c;
+  --gold: #f2c14e;
+  --accent: #6fb36a;
+  --danger: #d9534f;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: radial-gradient(circle at 50% 0%, #2d2a48 0%, var(--bg) 70%);
+  color: var(--text);
+  font-family: "Segoe UI", "Yu Gothic UI", "Meiryo", sans-serif;
+  min-height: 100vh;
+}
+
+#app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 12px 16px 24px;
+}
+
+#hud {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 12px;
+  background: var(--panel);
+  border: 2px solid #4b4670;
+  border-radius: 10px;
+  margin-bottom: 12px;
+}
+
+#hud h1 {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: 2px;
+  color: var(--gold);
+}
+
+.stats { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+.stat { font-size: 15px; }
+.stat b { font-size: 18px; margin-left: 2px; }
+.stat.phase {
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: #3b3860;
+  color: var(--muted);
+  font-size: 13px;
+}
+.stat.phase.wave { background: #6b2f2f; color: #ffd7d7; }
+
+.icon {
+  display: inline-block;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: -1px;
+}
+.icon.gold { background: var(--gold); box-shadow: 0 0 4px var(--gold); }
+.icon.heart { background: #e45c6a; border-radius: 3px; transform: rotate(45deg); }
+
+main {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+#game {
+  display: block;
+  border: 3px solid #5a5236;
+  border-radius: 6px;
+  background: #3f7a3a;
+  cursor: crosshair;
+  max-width: 100%;
+}
+
+#panel {
+  width: 260px;
+  flex: 1 0 220px;
+  background: var(--panel);
+  border: 2px solid #4b4670;
+  border-radius: 10px;
+  padding: 12px;
+}
+
+#panel h2 {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 10px 0 6px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+#panel h2:first-child { margin-top: 0; }
+
+.buttons { display: flex; flex-direction: column; gap: 6px; }
+
+button {
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--text);
+  background: #3b3860;
+  border: 2px solid #5a5690;
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  transition: background 0.1s, border-color 0.1s;
+}
+button:hover { background: #474380; }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+button small { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+button.tool { display: flex; align-items: center; gap: 10px; }
+button.tool .swatch {
+  width: 22px; height: 22px; flex: none;
+  border-radius: 4px;
+  border: 1px solid rgba(255,255,255,0.3);
+}
+button.tool .label { flex: 1; }
+button.tool .cost { color: var(--gold); font-weight: bold; }
+button.tool.active { border-color: var(--gold); background: #4f4a2d; }
+button.sell { margin-top: 6px; }
+button.sell.active { border-color: var(--danger); background: #5a2f2f; }
+
+button.primary {
+  background: #3e6b3a;
+  border-color: #6fb36a;
+  text-align: center;
+  font-weight: bold;
+  font-size: 16px;
+}
+button.primary:hover { background: #4b8046; }
+
+.speed { display: block; margin-top: 8px; font-size: 13px; color: var(--muted); }
+
+.message {
+  min-height: 40px;
+  margin-top: 10px;
+  padding: 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  background: #22203a;
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+.message.error { color: #ffb3b3; background: #4a2626; }
+.message.ok { color: #c8f0c0; background: #28402a; }
+
+.help { margin: 0; padding-left: 18px; font-size: 12px; color: var(--muted); line-height: 1.6; }
+
+.overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.65);
+  display: flex; align-items: center; justify-content: center;
+}
+.overlay.hidden { display: none; }
+.overlay-box {
+  background: var(--panel);
+  border: 3px solid var(--gold);
+  border-radius: 14px;
+  padding: 28px 36px;
+  text-align: center;
+  min-width: 320px;
+}
+.overlay-box h2 { margin: 0 0 8px; font-size: 28px; color: var(--gold); }
+.overlay-box p { color: var(--muted); margin: 0 0 18px; white-space: pre-wrap; }
